@@ -9,13 +9,15 @@ LIQUID_DIR = ".liquid"
 STATE_FILE = "state.json"
 
 
-def _ensure_dir(workspace_root: Path) -> Path:
+def _ensure_dir(workspace_root) -> Path:
+    if isinstance(workspace_root, str):
+        workspace_root = Path(workspace_root)
     d = workspace_root / LIQUID_DIR
     d.mkdir(exist_ok=True)
     return d
 
 
-def load(workspace_root: Path) -> WorkspaceState:
+def load(workspace_root) -> WorkspaceState:
     path = _ensure_dir(workspace_root) / STATE_FILE
     if not path.exists():
         return WorkspaceState()
@@ -24,7 +26,7 @@ def load(workspace_root: Path) -> WorkspaceState:
     return _from_dict(data)
 
 
-def save(state: WorkspaceState, workspace_root: Path):
+def save(state: WorkspaceState, workspace_root):
     path = _ensure_dir(workspace_root) / STATE_FILE
     with open(path, "w", encoding="utf-8") as f:
         json.dump(asdict(state), f, indent=2, ensure_ascii=False)
