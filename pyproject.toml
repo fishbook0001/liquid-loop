@@ -9,10 +9,10 @@ description = "Self-Organizing Cognitive Memory for AI Agents — Liquid Loop th
 readme = "README.md"
 license = {text = "MIT"}
 authors = [
-    {name = "Fei Ge", email = "feixubuke@example.com"}
+    {name = "fishbook0001"}
 ]
 maintainers = [
-    {name = "Fei Ge", email = "feixubuke@example.com"}
+    {name = "fishbook0001"}
 ]
 keywords = [
     "agent-memory",
@@ -55,11 +55,11 @@ docs = [
 ]
 
 [project.urls]
-Homepage = "https://gitee.com/feixubuke/liquid-loop"
-Repository = "https://gitee.com/feixubuke/liquid-loop"
-Documentation = "https://liquid-loop.readthedocs.io"
-Issues = "https://gitee.com/feixubuke/liquid-loop/issues"
-Changelog = "https://gitee.com/feixubuke/liquid-loop/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/fishbook0001/liquid-loop"
+Repository = "https://github.com/fishbook0001/liquid-loop"
+Documentation = "https://github.com/fishbook0001/liquid-loop#readme"
+Issues = "https://github.com/fishbook0001/liquid-loop/issues"
+Changelog = "https://github.com/fishbook0001/liquid-loop/blob/main/CHANGELOG.md"
 
 [project.scripts]
 liquid-loop = "liquid_loop.cli:main"
