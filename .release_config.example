@@ -1,7 +1,9 @@
 # 复制此文件为 .release_config 并填入真实值
-# Gitee 用户名（你的 Gitee 账号名，不是显示名）
-GITEE_USER=your_gitee_username
-# Gitee 仓库名（刚创建的仓库名）
-GITEE_REPO=liquid-loop
+# GitHub 用户名
+GITHUB_USER=your_github_username
+# GitHub 仓库名
+GITHUB_REPO=liquid-loop
 # PyPI API Token（格式: pypi-xxxxxxxxxxxxxxxx，只显示一次，请妥善保存）
 PYPI_TOKEN=pypi-your_token_here
+# SSH Key 路径（沙箱环境需要指定，非沙箱可留空）
+# SSH_KEY=~/.ssh/id_ed25519

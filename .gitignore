@@ -25,3 +25,9 @@ Thumbs.db
 
 # Release config (contains secrets)
 .release_config
+
+# Temp
+.venv/
+upload_pypi.py
+*.tar.gz
+*.zip
