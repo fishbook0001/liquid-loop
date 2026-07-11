@@ -84,26 +84,23 @@ save(state, Path("."))
 # 初始化工作区（创建 .liquid/state.json）
 liquid-loop init
 
-# 添加锚点
+# 添加锚点（支持自动四维分类）
 liquid-loop anchor_add "项目目标" "完成液环论文与开源"
 
 # 注入证据
 liquid-loop evidence_add "项目目标" "已完成 11 轮实验与 4 个实证包"
 
-# 查看状态
+# 查看状态（含审计链哈希）
 liquid-loop status
-# 输出:
-# ╭──────────────────────────────────────────────╮
-# │ Liquid Loop 认知状态                          │
-# ├──────────┬──────┬────────┬────────┬────────┬──┤
-# │ 锚点     │ 证据 │ 结晶   │ 冲突   │ 熵值   │  │
-# ├──────────┼──────┼────────┼────────┼────────┼──┤
-# │ 项目目标 │ 3    │ 1      │ 0      │ 0.2760 │ 🟢│
-# ╰──────────┴──────┴────────┴────────┴────────┴──╯
-# 锚点稳定性: 项目目标=0.88
 
 # 列出所有记忆结晶
 liquid-loop memory_list
+
+# 审计：验证链式哈希完整性
+liquid-loop audit
+
+# 查看审计日志（最近 20 条）
+liquid-loop audit-log --tail 20
 
 # 快照（记录当前认知基线）
 liquid-loop snapshot
@@ -155,10 +152,10 @@ Liquid Loop 是唯一完全自组织 + 零 LLM 管理的系统。
 liquid-loop/
 ├── liquid_loop/
 │   ├── __init__.py      # 公共 API 导出
-│   ├── workspace.py     # 核心数据模型
-│   ├── storage.py       # JSON 持久化
+│   ├── workspace.py     # 核心数据模型 + AuditChain + auto_classify + decay
+│   ├── storage.py       # JSON 持久化 + 审计链写入
 │   ├── entropy.py       # 四维熵值计算
-│   └── cli.py           # Click CLI (9 命令)
+│   └── cli.py           # Click CLI (11 命令)
 ├── examples/
 │   └── quickstart.py
 ├── tests/               # 待补充
