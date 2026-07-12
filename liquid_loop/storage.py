@@ -36,13 +36,15 @@ def load(workspace_root: Path) -> WorkspaceState:
 def save(state: WorkspaceState, workspace_root: Path):
     state.updated_at = now()
     path = _ensure_dir(workspace_root) / STATE_FILE
-    data = asdict(state)
-    # 审计：每次保存记录state快照哈希
+    # 审计链：记录并回写哈希
     audit = get_audit_chain(workspace_root)
-    audit.append("state_save",
+    audit_hash = audit.append("state_save",
         f"anchors={len(state.anchors)}_evidences={len(state.evidences)}"
         f"_memories={len(state.memories)}_relations={len(state.relations)}"
     )
+    state.audit_prev_hash = state.audit_chain_hash
+    state.audit_chain_hash = audit_hash
+    data = asdict(state)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
@@ -55,8 +57,11 @@ def _from_dict(data: dict) -> WorkspaceState:
         conflicts=[Conflict(**c) for c in data.get("conflicts", [])],
         relations=[AnchorRelation(**r) for r in data.get("relations", [])],
         snapshots=[StateSnapshot(**s) for s in data.get("snapshots", [])],
-        version=data.get("version", "0.3.0"),
+        version=data.get("version", "0.4.0"),
         updated_at=data.get("updated_at", ""),
         audit_chain_hash=data.get("audit_chain_hash", "genesis"),
         audit_prev_hash=data.get("audit_prev_hash", ""),
+        self_refine_probes=data.get("self_refine_probes", []),
+        self_refine_results=data.get("self_refine_results", []),
+        self_refine_repair_count=data.get("self_refine_repair_count", 0),
     )
