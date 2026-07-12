@@ -197,7 +197,7 @@ class WorkspaceState:
     relations: list[AnchorRelation] = field(default_factory=list)
     audit_chain_hash: str = "genesis"
     audit_prev_hash: str = ""
-    version: str = "0.5.3"
+    version: str = "0.5.4"
     updated_at: str = field(default_factory=now)
     # 【v0.4.0】后向自进化状态（借鉴 MemMA 原位自进化）
     self_refine_probes: list[dict] = field(default_factory=list)

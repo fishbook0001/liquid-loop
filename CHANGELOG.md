@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.5.3 (2026-07-12) — 锚点自进化补强 + bug 修复
+## v0.5.4 (2026-07-12) — 锚点自进化补强 + bug 修复（跳过被 PyPI yank 的 0.5.3）
 
 ### 修复
 - **严重 bug**：`CPERegularizer.evaluate_new_evidence` 的 MERGE 分支引用了未定义变量 `protection_weight`（该变量在函数末尾才定义），命中"近似重复"证据时必抛 `NameError`。已移除该键。
