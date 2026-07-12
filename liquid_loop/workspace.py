@@ -197,7 +197,7 @@ class WorkspaceState:
     relations: list[AnchorRelation] = field(default_factory=list)
     audit_chain_hash: str = "genesis"
     audit_prev_hash: str = ""
-    version: str = "0.5.2"
+    version: str = "0.5.3"
     updated_at: str = field(default_factory=now)
     # 【v0.4.0】后向自进化状态（借鉴 MemMA 原位自进化）
     self_refine_probes: list[dict] = field(default_factory=list)
@@ -252,10 +252,11 @@ class WorkspaceState:
         return e
 
     def _on_evidence_added(self, anchor_id: str):
-        """证据添加后的统一后处理：衰减→成核→稳定性刷新"""
+        """证据添加后的统一后处理：衰减→成核→稳定性刷新→群内自洽检测"""
         self._decay_anchor(anchor_id)
         self._nucleate(anchor_id)
         self._recalc_anchor(anchor_id)
+        self._detect_conflicts(anchor_id)
 
     def _decay_anchor(self, anchor_id: str):
         for e in self.evidences:
@@ -263,10 +264,11 @@ class WorkspaceState:
                 e.weight = max(e.weight * 0.95, 0.1)
 
     def _nucleate(self, anchor_id: str):
-        """成核：同锚点下 >= 2 条一致证据形成记忆结晶"""
+        """成核：同锚点下 >= 2 条一致证据形成记忆结晶；高置信结晶回流更新锚点描述"""
         group = [e for e in self.evidences if e.anchor_id == anchor_id]
         if len(group) < 2:
             return
+        anchor = next((a for a in self.anchors if a.id == anchor_id), None)
         from collections import Counter
         content_counts = Counter(e.content for e in group)
         for content, count in content_counts.items():
@@ -280,6 +282,9 @@ class WorkspaceState:
                     evidence_ids=evidence_ids,
                     confidence=confidence,
                 ))
+                # 【自进化回流】高置信结晶自动回填锚点空描述（仅当描述为空，尊重人工设定）
+                if confidence >= 0.8 and anchor and not anchor.description:
+                    anchor.description = content
 
     def _recalc_anchor(self, anchor_id: str):
         group = [e for e in self.evidences if e.anchor_id == anchor_id]
@@ -293,6 +298,35 @@ class WorkspaceState:
                 a.decay_value(evidence_count=evidence_count)
                 a.recalc_strength(evidence_count)
                 a.auto_classify(evidence_count)
+
+    def _detect_conflicts(self, anchor_id: str):
+        """群内自洽检测：同锚点证据一致性过低 → 生成 Conflict 记录并降锚点稳定性。
+
+        复用 CPE 泛化防线思路：证据间平均关键词重叠 < 0.2 且 >= 3 条 → 潜在冲突/漂移。
+        保守处理：只标记'需人工确认'，不武断判相反（避免过度工程化误报）。
+        """
+        group = [e for e in self.evidences if e.anchor_id == anchor_id]
+        if len(group) < 3:
+            return
+        overlaps = []
+        for i in range(len(group)):
+            for j in range(i + 1, len(group)):
+                if group[i].content and group[j].content:
+                    overlaps.append(_keyword_overlap(group[i].content, group[j].content))
+        if not overlaps:
+            return
+        avg = sum(overlaps) / len(overlaps)
+        if avg < 0.2:
+            anchor = next((a for a in self.anchors if a.id == anchor_id), None)
+            if any(c.anchor_a == anchor_id for c in self.conflicts):
+                return
+            self.conflicts.append(Conflict(
+                anchor_a=anchor_id,
+                description=f"证据间平均一致度 {avg:.2f}（<0.2），存在潜在冲突/漂移，需人工确认",
+                severity=round(1.0 - avg, 2),
+            ))
+            if anchor:
+                anchor.stability = max(0.1, anchor.stability * 0.9)
 
     def add_memory(self, content: str, evidence_ids: list[str] | None = None) -> Memory:
         """添加一条记忆结晶"""
@@ -360,7 +394,6 @@ class CPERegularizer:
                     "max_overlap": round(max_overlap, 3),
                     "avg_overlap": round(avg_overlap, 3),
                     "drift_score": round(drift_score, 3),
-                    "protection_weight": round(protection_weight, 3),
                     "existing_evidence_count": len(evs),
                     "duplicate_of": duplicate_of,
                 }

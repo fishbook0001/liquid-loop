@@ -80,9 +80,9 @@ def init():
     if s.anchors or s.evidences:
         click.echo("工作区已初始化，无需重复操作。")
         return
-    s.version = "0.5.2"
+    s.version = "0.5.3"
     _save(s)
-    click.echo(f"✓ Liquid Loop v0.5.1 工作区已初始化: {WORKSPACE}/.liquid/")
+    click.echo(f"✓ Liquid Loop v0.5.3 工作区已初始化: {WORKSPACE}/.liquid/")
 
 
 @main.command()

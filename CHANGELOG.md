@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.5.3 (2026-07-12) — 锚点自进化补强 + bug 修复
+
+### 修复
+- **严重 bug**：`CPERegularizer.evaluate_new_evidence` 的 MERGE 分支引用了未定义变量 `protection_weight`（该变量在函数末尾才定义），命中"近似重复"证据时必抛 `NameError`。已移除该键。
+
+### 新增：锚点自进化（回应「锚点群自进化」思路，先做窄不做宽）
+- **成核回流**：`WorkspaceState._nucleate` 中，结晶 confidence ≥ 0.8 时自动回填锚点空描述（仅当描述为空，尊重人工设定），让结晶结论回流提升锚点质量
+- **群内自洽检测**：`_on_evidence_added` 新增 `_detect_conflicts`，同锚点证据平均一致度 < 0.2（≥3 条）自动生成 `Conflict` 记录并降 stability，让 `Conflict` 类从死字段变活角标
+- `liquid-loop status` 现列出冲突/不一致明细
+- 锚点群（Cluster）全局概念暂缓：当前锚点量未到阈值（<200），属过度设计；单对单关联已由 `AnchorRelation` 表达
+
 ## v0.5.2 (2026-07-12) — 补丁版
 
 ### 修复
