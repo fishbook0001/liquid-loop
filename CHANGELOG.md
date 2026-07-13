@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.6.1 (2026-07-13) — 节律采样检索 + 缓存持久化修复
+
+### 核心修复
+- **overlap_cache 持久化崩溃（#bug）**：`_keyword_overlap` 缓存键由 `tuple` 改为 `str`（md5 哈希拼接），根除 `storage.save` 因 tuple 键无法 JSON 序列化而抛 `TypeError` 的问题；`storage.save` 同时 `pop("overlap_cache")` 排除运行时缓存，双重保险
+- **跨机共识桥接可用**：液环现可安全持久化含 GNN 解释边证据的 workspace（E2 桥接实证 5 锚点 / 80 证据 / 31 结晶）
+
+### 新增能力
+- **节律采样检索 `rhythmic_retrieve`**：受 Biba et al. 2026（Nature Human Behaviour, 7Hz theta 脉冲记忆编码）启发，分窗口脉冲采样、每组取最优、跨组去重；相比直接 top-N 避免同质记忆堆叠、增加多样性。已加入 `__init__` 导出
+
+### 其他
+- 版本号 bump 至 0.6.1（包名保持 `liquid_loop`，与 0.6.0 一致）
+
 ## v0.6.0 (2026-07-13) — CPE 融合 + 主动自精炼 + 策略层
 
 ### 核心升级

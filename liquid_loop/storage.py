@@ -57,6 +57,8 @@ def save(state: WorkspaceState, workspace_root: Path):
     state.audit_prev_hash = state.audit_chain_hash
     state.audit_chain_hash = audit_hash
     data = asdict(state)
+    # overlap_cache 仅为运行时熵计算缓存，键为 tuple，不可 JSON 序列化，且不具持久价值
+    data.pop("overlap_cache", None)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
