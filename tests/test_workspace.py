@@ -43,3 +43,32 @@ def test_auto_describe_anchor():
     state._nucleate(a.id)
     # 如果有高置信结晶，描述会被填充
     # 这里主要测试不报错
+
+
+def test_nucleate_no_cross_anchor_pollution():
+    """P0 回归（v0.6.2）：两锚点存在相同 content 证据时各自独立成核，不互相吞噬/污染。
+
+    修复前 `_nucleate` 用全局 `m.content == content` 查重，不限定 anchor_id：
+    锚点 A 已结晶 content=X 后，锚点 B 同 content 证据被 `continue` 跳过 →
+    仅 1 条结晶且 B 的证据丢失。修复后应为 2 条结晶，且各自 evidence_ids 不跨锚点。
+    """
+    state = WorkspaceState()
+    a1 = state.add_anchor('锚点A')
+    a2 = state.add_anchor('锚点B')
+    state.add_evidence(a1.id, 'shared fact')
+    state.add_evidence(a1.id, 'shared fact')
+    state.add_evidence(a2.id, 'shared fact')
+    state.add_evidence(a2.id, 'shared fact')
+
+    # 每个锚点各成核 1 条结晶（共 2 条）
+    assert len(state.memories) == 2
+    # 每条结晶的 evidence_ids 必须只属于单一锚点（无跨锚点污染）
+    for m in state.memories:
+        evs = [e for e in state.evidences if e.id in m.evidence_ids]
+        assert len({e.anchor_id for e in evs}) == 1
+    # 锚点 A 与 B 的结晶分别存在
+    a1_ev_ids = {e.id for e in state.evidences if e.anchor_id == a1.id}
+    a2_ev_ids = {e.id for e in state.evidences if e.anchor_id == a2.id}
+    assert any(set(m.evidence_ids) == a1_ev_ids for m in state.memories)
+    assert any(set(m.evidence_ids) == a2_ev_ids for m in state.memories)
+

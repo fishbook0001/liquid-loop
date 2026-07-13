@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.6.2 (2026-07-14) — 跨锚点误结晶修复 + 文档校正
+
+### 核心修复
+- **P0 跨锚点误结晶（`_nucleate`，#bug）**：成核查重由全局 `content` 唯一键改为 `(anchor_id, content)` 复合键。原实现不限定锚点，当两个不同锚点存在相同 `content` 证据时，第二条会被错误跳过、且结晶 `evidence_ids` 跨锚点污染——在 E2 液环↔GNN 桥接（共享边对称表示）下会污染审计链。修复后各锚点独立成核、零跨锚点污染。新增回归测试 `test_nucleate_no_cross_anchor_pollution`。
+
+### 文档校正
+- 纠正"四维分类 / 四维熵"误导表述：实际为**三维锚点分类**（value_density / cognitive_stage / liquidity）+ **一维证据质量**，熵值为**八维加权**（含 CPE 三维）。同步校正 `workspace.py` / `entropy.py` 注释、`README.md`、`cli.py`、`examples/quickstart.py`。
+
+### 工程
+- 版本号 bump 至 0.6.2（包名保持 `liquid_loop`）
+
 ## v0.6.1 (2026-07-13) — 节律采样检索 + 缓存持久化修复
 
 ### 核心修复

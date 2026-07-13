@@ -63,7 +63,7 @@ class AuditChain:
         return expected == stored_hash
 
 
-# --- 四维分类（借鉴 KFG 4D Classifier）---
+# --- 三维锚点分类（密度 / 认知阶段 / 流动性）+ 一维证据质量 ---
 DensityLevel = str  # "high" | "medium" | "low"
 CognitiveStage = str  # "raw" | "wip" | "crystallized" | "tooling"
 LiquidityLevel = str  # "hot" | "warm" | "cold" | "frozen"
@@ -278,16 +278,25 @@ class WorkspaceState:
                 e.weight = max(e.weight * 0.95, 0.1)
 
     def _nucleate(self, anchor_id: str):
-        """成核：同锚点下 >= 2 条一致证据形成记忆结晶"""
+        """成核：同锚点下 >= 2 条一致证据形成记忆结晶。
+
+        复合键判定：查重限定在当前锚点内（(anchor_id, content)），避免跨锚点
+        同 content 证据被错误吞掉或并入同一结晶（P0 跨锚点误结晶修复, v0.6.2）。
+        """
         group = [e for e in self.evidences if e.anchor_id == anchor_id]
         if len(group) < 2:
             return
-        from collections import Counter
+        # 本锚点已结晶的 content 集合（复合键判定，杜绝跨锚点污染）
+        crystallized_contents: set[str] = set()
+        for m in self.memories:
+            for eid in m.evidence_ids:
+                ev = next((e for e in self.evidences if e.id == eid), None)
+                if ev is not None and ev.anchor_id == anchor_id:
+                    crystallized_contents.add(m.content)
+                    break
         content_counts = Counter(e.content for e in group)
         for content, count in content_counts.items():
-            if count >= 2:
-                if any(m.content == content for m in self.memories):
-                    continue
+            if count >= 2 and content not in crystallized_contents:
                 evidence_ids = [e.id for e in group if e.content == content]
                 confidence = min(count / len(group), 1.0)
                 self.memories.append(Memory(

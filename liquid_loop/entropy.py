@@ -52,7 +52,7 @@ def activity_gap(state: WorkspaceState) -> float:
     return min(gap / timedelta(days=7), 1.0)
 
 
-# 【借鉴KFG】四维熵值分量
+# 熵值分量（综合见 calculate，八维加权含 CPE 三维）
 
 def value_decay_entropy(state: WorkspaceState) -> float:
     """锚点价值衰减熵。0=全部高价值, 1=全部低价值 — 纯函数，不改 state"""

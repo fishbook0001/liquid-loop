@@ -33,7 +33,7 @@
 | **Anchor** 锚点 | 晶种 | 认知关注点，有稳定性值 s ∈ [0,1] |
 | **Evidence** 证据 | 附着粒子 | 锚点下的具体观察，权重指数衰减 w×0.95ᵗ |
 | **Memory** 结晶 | 结晶体 | 2+ 条一致 Evidence 自动凝聚，有置信度 c |
-| **Entropy** 熵值 | 流体无序度 | 四维加权：drift×0.25 + conflict×0.25 + fragmentation×0.25 + gap×0.25 |
+| **Entropy** 熵值 | 流体无序度 | 八维加权（锚点漂移 / 冲突密度 / 碎片 / 活跃间隔 / 价值衰减 / 锚定强度 / CPE 三维） |
 
 **状态判定：**
 ```
@@ -84,7 +84,7 @@ save(state, Path("."))
 # 初始化工作区（创建 .liquid/state.json）
 liquid-loop init
 
-# 添加锚点（支持自动四维分类）
+# 添加锚点（支持自动三维分类：密度 / 认知阶段 / 流动性）
 liquid-loop anchor_add "项目目标" "完成液环论文与开源"
 
 # 注入证据

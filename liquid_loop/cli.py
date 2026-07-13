@@ -104,7 +104,7 @@ def status():
 
 @main.command()
 def anchor_list():
-    """列出所有锚点（含四维分类 + 价值衰减）"""
+    """列出所有锚点（含三维分类 + 价值衰减）"""
     s = _load()
     if not s.anchors:
         click.echo("暂无锚点。使用 liquid anchor add <名称> <描述> 添加。")
