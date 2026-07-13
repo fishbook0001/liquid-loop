@@ -80,9 +80,9 @@ def init():
     if s.anchors or s.evidences:
         click.echo("工作区已初始化，无需重复操作。")
         return
-    s.version = "0.5.4"
+    s.version = "0.5.1"
     _save(s)
-    click.echo(f"✓ Liquid Loop v0.5.4 工作区已初始化: {WORKSPACE}/.liquid/")
+    click.echo(f"✓ Liquid Loop v0.5.1 工作区已初始化: {WORKSPACE}/.liquid/")
 
 
 @main.command()
@@ -521,3 +521,55 @@ def cpe_status():
 
 if __name__ == "__main__":
     main()
+
+@cli.command()
+@click.argument("content")
+@click.option("--evidence-ids", help="证据ID列表，逗号分隔")
+def memory_add(content: str, evidence_ids: str):
+    """添加一条记忆结晶"""
+    state = load_state()
+    eids = [eid.strip() for eid in evidence_ids.split(",")] if evidence_ids else None
+    state.add_memory(content, eids)
+    save_state(state)
+    click.echo(f"Memory added: {content[:50]}...")
+
+@cli.command()
+def memory_list():
+    """列出所有记忆结晶"""
+    state = load_state()
+    if not state.memories:
+        click.echo("No memories yet")
+        return
+    for m in state.memories:
+        click.echo(f"  {m.id[:8]} | conf={m.confidence:.2f} | {m.content[:60]}...")
+
+@cli.command()
+@click.argument("anchor_id")
+def conflict_resolve(anchor_id: str):
+    """标记冲突为已解决（移除该锚点的冲突记录）"""
+    state = load_state()
+    before = len(state.conflicts)
+    state.conflicts = [c for c in state.conflicts if c.anchor_a != anchor_id]
+    after = len(state.conflicts)
+    save_state(state)
+    click.echo(f"Resolved {before - after} conflict(s) for anchor {anchor_id}")
+
+@cli.command()
+@click.argument("anchor_id")
+@click.argument("description")
+def anchor_describe(anchor_id: str, description: str):
+    """手动设置锚点描述"""
+    state = load_state()
+    anchor = next((a for a in state.anchors if a.id == anchor_id or a.name == anchor_id), None)
+    if not anchor:
+        click.echo(f"Anchor not found: {anchor_id}")
+        return
+    anchor.description = description
+    save_state(state)
+    click.echo(f"Anchor '{anchor.name}' description updated")
+
+@cli.command()
+def version():
+    """显示版本号"""
+    from . import __version__
+    click.echo(f"liquid-loop {__version__}")

@@ -23,6 +23,18 @@ def get_audit_chain(workspace_root: Path) -> AuditChain:
     """获取审计链实例"""
     return AuditChain(str(_ensure_dir(workspace_root) / AUDIT_FILE))
 
+import fcntl
+from contextlib import contextmanager
+
+@contextmanager
+def _file_lock(filepath: str, mode: str = "w"):
+    """跨平台文件锁（fcntl，Linux/macOS）"""
+    with open(filepath, mode) as f:
+        try:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            yield f
+        finally:
+            fcntl.flock(f, fcntl.LOCK_UN)
 
 def load(workspace_root: Path) -> WorkspaceState:
     path = _ensure_dir(workspace_root) / STATE_FILE

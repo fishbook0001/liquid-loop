@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 import uuid
+from pathlib import Path
 import hashlib
 import json
 import os
@@ -187,6 +188,18 @@ class StateSnapshot:
     conflict_count: int = 0
 
 
+def _get_version() -> str:
+    """从 pyproject.toml 读取版本号"""
+    try:
+        import tomllib
+    except ImportError:
+        import tomli as tomllib
+    pyproject = Path(__file__).parent.parent / "pyproject.toml"
+    if pyproject.exists():
+        data = tomllib.loads(pyproject.read_text())
+        return data.get("project", {}).get("version", "0.5.4")
+    return "0.5.4"
+
 @dataclass
 class WorkspaceState:
     anchors: list[Anchor] = field(default_factory=list)
@@ -197,7 +210,7 @@ class WorkspaceState:
     relations: list[AnchorRelation] = field(default_factory=list)
     audit_chain_hash: str = "genesis"
     audit_prev_hash: str = ""
-    version: str = "0.5.4"
+    version: str = field(default_factory=_get_version)
     updated_at: str = field(default_factory=now)
     # 【v0.4.0】后向自进化状态（借鉴 MemMA 原位自进化）
     self_refine_probes: list[dict] = field(default_factory=list)
@@ -208,6 +221,7 @@ class WorkspaceState:
     blocked_evidences: list[str] = field(default_factory=list)      # 被正则化拦截的证据ID
     cpe_erosion_warnings: list[dict] = field(default_factory=list)  # 能力侵蚀告警
     cpe_regularization_count: int = 0                               # 累计正则化干预次数
+    overlap_cache: dict = field(default_factory=dict)  # 缓存关键词重叠度
 
     # ── API 层：add_anchor / add_evidence（让 README 示例能跑通）──
 
@@ -252,7 +266,7 @@ class WorkspaceState:
         return e
 
     def _on_evidence_added(self, anchor_id: str):
-        """证据添加后的统一后处理：衰减→成核→稳定性刷新→群内自洽检测"""
+        """证据添加后的统一后处理：衰减→成核→稳定性刷新→冲突检测"""
         self._decay_anchor(anchor_id)
         self._nucleate(anchor_id)
         self._recalc_anchor(anchor_id)
@@ -264,11 +278,10 @@ class WorkspaceState:
                 e.weight = max(e.weight * 0.95, 0.1)
 
     def _nucleate(self, anchor_id: str):
-        """成核：同锚点下 >= 2 条一致证据形成记忆结晶；高置信结晶回流更新锚点描述"""
+        """成核：同锚点下 >= 2 条一致证据形成记忆结晶"""
         group = [e for e in self.evidences if e.anchor_id == anchor_id]
         if len(group) < 2:
             return
-        anchor = next((a for a in self.anchors if a.id == anchor_id), None)
         from collections import Counter
         content_counts = Counter(e.content for e in group)
         for content, count in content_counts.items():
@@ -282,9 +295,54 @@ class WorkspaceState:
                     evidence_ids=evidence_ids,
                     confidence=confidence,
                 ))
-                # 【自进化回流】高置信结晶自动回填锚点空描述（仅当描述为空，尊重人工设定）
-                if confidence >= 0.8 and anchor and not anchor.description:
-                    anchor.description = content
+        # 成核后触发自动描述回流（仅当描述为空）
+        self._auto_describe_anchor(anchor_id)
+
+    def _auto_describe_anchor(self, anchor_id: str):
+        """高置信结晶自动回填锚点空描述（尊重人工设定）"""
+        anchor = next((a for a in self.anchors if a.id == anchor_id), None)
+        if not anchor or anchor.description:
+            return
+        crystals = [m for m in self.memories if any(eid in [e.id for e in self.evidences if e.anchor_id == anchor_id] for eid in m.evidence_ids)]
+        if crystals:
+            best = max(crystals, key=lambda m: m.confidence)
+            if best.confidence >= 0.8:
+                anchor.description = best.content
+
+    def _detect_conflicts(self, anchor_id: str):
+        """群内自洽检测：同锚点证据一致性过低 -> 生成 Conflict 记录并降锚点稳定性。
+        
+        阈值从环境变量 LIQUID_CONFLICT_THRESHOLD 读取（默认 0.2）。
+        复用 CPE 泛化防线思路：证据间平均关键词重叠 < threshold 且 >= 3 条 -> 潜在冲突/漂移。
+        保守处理：只标记'需人工确认'，不武断判相反（避免过度工程化误报）。
+        使用 overlap_cache 避免重复计算。
+        """
+        import os
+        conflict_threshold = float(os.environ.get('LIQUID_CONFLICT_THRESHOLD', '0.2'))
+        
+        group = [e for e in self.evidences if e.anchor_id == anchor_id]
+        if len(group) < 3:
+            return
+        overlaps = []
+        for i in range(len(group)):
+            for j in range(i + 1, len(group)):
+                if group[i].content and group[j].content:
+                    overlaps.append(_keyword_overlap(group[i].content, group[j].content, self.overlap_cache))
+        if not overlaps:
+            return
+        avg = sum(overlaps) / len(overlaps)
+        if avg < conflict_threshold:
+            anchor = next((a for a in self.anchors if a.id == anchor_id), None)
+            if any(c.anchor_a == anchor_id for c in self.conflicts):
+                return
+            self.conflicts.append(Conflict(
+                anchor_a=anchor_id,
+                description=f"证据间平均一致度 {avg:.2f}（<{conflict_threshold}），存在潜在冲突/漂移，需人工确认",
+                severity=round(1.0 - avg, 2),
+            ))
+            if anchor:
+                anchor.stability = max(0.1, anchor.stability * 0.9)
+
 
     def _recalc_anchor(self, anchor_id: str):
         group = [e for e in self.evidences if e.anchor_id == anchor_id]
@@ -298,35 +356,6 @@ class WorkspaceState:
                 a.decay_value(evidence_count=evidence_count)
                 a.recalc_strength(evidence_count)
                 a.auto_classify(evidence_count)
-
-    def _detect_conflicts(self, anchor_id: str):
-        """群内自洽检测：同锚点证据一致性过低 → 生成 Conflict 记录并降锚点稳定性。
-
-        复用 CPE 泛化防线思路：证据间平均关键词重叠 < 0.2 且 >= 3 条 → 潜在冲突/漂移。
-        保守处理：只标记'需人工确认'，不武断判相反（避免过度工程化误报）。
-        """
-        group = [e for e in self.evidences if e.anchor_id == anchor_id]
-        if len(group) < 3:
-            return
-        overlaps = []
-        for i in range(len(group)):
-            for j in range(i + 1, len(group)):
-                if group[i].content and group[j].content:
-                    overlaps.append(_keyword_overlap(group[i].content, group[j].content))
-        if not overlaps:
-            return
-        avg = sum(overlaps) / len(overlaps)
-        if avg < 0.2:
-            anchor = next((a for a in self.anchors if a.id == anchor_id), None)
-            if any(c.anchor_a == anchor_id for c in self.conflicts):
-                return
-            self.conflicts.append(Conflict(
-                anchor_a=anchor_id,
-                description=f"证据间平均一致度 {avg:.2f}（<0.2），存在潜在冲突/漂移，需人工确认",
-                severity=round(1.0 - avg, 2),
-            ))
-            if anchor:
-                anchor.stability = max(0.1, anchor.stability * 0.9)
 
     def add_memory(self, content: str, evidence_ids: list[str] | None = None) -> Memory:
         """添加一条记忆结晶"""
@@ -623,12 +652,24 @@ def _tokenize(text: str) -> List[str]:
     return tokens
 
 
-def _keyword_overlap(a: str, b: str) -> float:
-    """关键词重叠度（替代 embedding cosine）"""
-    sa, sb = set(_tokenize(a)), set(_tokenize(b))
-    if not sa or not sb:
+def _keyword_overlap(a: str, b: str, cache: dict | None = None) -> float:
+    """关键词重叠度（Jaccard 系数），支持缓存"""
+    if not a or not b:
         return 0.0
-    return len(sa & sb) / len(sa | sb)
+    if cache is not None:
+        import hashlib
+        key = tuple(sorted([hashlib.md5(a.encode()).hexdigest()[:8], hashlib.md5(b.encode()).hexdigest()[:8]]))
+        if key in cache:
+            return cache[key]
+    import re
+    tokens1 = set(re.findall(r"[一-鿿]|[a-zA-Z0-9]+", a.lower()))
+    tokens2 = set(re.findall(r"[一-鿿]|[a-zA-Z0-9]+", b.lower()))
+    if not tokens1 or not tokens2:
+        return 0.0
+    result = len(tokens1 & tokens2) / len(tokens1 | tokens2)
+    if cache is not None:
+        cache[key] = result
+    return result
 
 
 def _judge_answer(gold: str, answer: str) -> bool:

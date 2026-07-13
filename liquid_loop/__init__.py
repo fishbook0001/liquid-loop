@@ -1,5 +1,5 @@
-"""Liquid Loop — Workspace Cognitive Runtime v0.5.1 (CPE-fused, proactive)"""
-__version__ = "0.5.2"
+"""Liquid Loop — Workspace Cognitive Runtime v0.6.0 (CPE-fused, proactive)"""
+__version__ = "0.6.0"
 
 from .workspace import (
     WorkspaceState, Anchor, Evidence, Memory, Conflict,

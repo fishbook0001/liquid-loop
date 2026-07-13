@@ -2,6 +2,18 @@ from datetime import datetime, timezone, timedelta
 from .workspace import WorkspaceState
 
 
+from contextlib import contextmanager
+
+@contextmanager
+def temp_attr(obj, attr: str, new_val):
+    """临时修改对象属性，退出时自动还原（异常安全）"""
+    old_val = getattr(obj, attr)
+    setattr(obj, attr, new_val)
+    try:
+        yield
+    finally:
+        setattr(obj, attr, old_val)
+
 def anchor_drift(state: WorkspaceState) -> float:
     """所有 Anchor 的 stability 偏离 1.0 的均值。0=全稳, 1=全漂"""
     if not state.anchors:
@@ -79,31 +91,25 @@ def strength_entropy(state: WorkspaceState) -> float:
 def retrospective_decay_entropy(state: WorkspaceState) -> float:
     """回顾性衰退熵。0=无衰退, 1=大规模衰退（CPE §1: Retrospective decay）
 
-    纯函数快照，不改 state。每锚点计算最新 vs 次新证据的 value_score 变化比。
+    语义对齐 CPE 定义：新知识（证据）加入后，旧锚点基线能力（value_score）的下降比例。
+    维护每个锚点的 baseline_value_score（首次结晶/人工设定时的基线），对比当前值。
     """
     if not state.anchors or not state.evidences:
         return 0.0
     decay_scores = []
     for a in state.anchors:
-        evs = sorted(
-            [e for e in state.evidences if e.anchor_id == a.id],
-            key=lambda x: x.timestamp, reverse=True
-        )
+        evs = [e for e in state.evidences if e.anchor_id == a.id]
         if len(evs) < 2:
             continue
-        # 快照原始值
-        orig_score = a.value_score
-        orig_strength = a.anchor_strength
-        # 最新证据时的 score
-        new_score = a.decay_value(evidence_count=len(evs))
-        new_score_val = a.value_score
-        # 少一条证据时的 score（传参模式，不依赖 state 缓存）
-        old_score = a.decay_value(evidence_count=len(evs) - 1)
-        # 还原 state
-        a.value_score = orig_score
-        a.anchor_strength = orig_strength
-        if old_score > 0:
-            ratio = max(0, 1 - new_score_val / old_score)
+        # 基线：锚点创建时或首次结晶时的 value_score（若无记录，用当前值的 1.1 倍估算）
+        baseline = getattr(a, "baseline_value_score", None)
+        if baseline is None:
+            baseline = a.value_score * 1.1
+            a.baseline_value_score = baseline
+        # 当前衰减后的价值
+        current = a.decay_value(evidence_count=len(evs))
+        if baseline > 0:
+            ratio = max(0, 1 - current / baseline)
             decay_scores.append(ratio)
     return sum(decay_scores) / len(decay_scores) if decay_scores else 0.0
 
@@ -111,7 +117,8 @@ def retrospective_decay_entropy(state: WorkspaceState) -> float:
 def behavioral_drift_entropy(state: WorkspaceState) -> float:
     """策略漂移熵。0=无漂移, 1=剧烈漂移（CPE §1: Behavioral policy drift）
 
-    纯函数快照，不改 state。测量锚点 stability 在最近一次更新中的变化幅度。
+    语义：锚点锚定强度在最近一次证据更新前后的变化幅度。
+    使用上下文管理器保证不修改 state。
     """
     if not state.anchors:
         return 0.0
@@ -121,16 +128,12 @@ def behavioral_drift_entropy(state: WorkspaceState) -> float:
         if len(evs) < 2:
             continue
         evs_sorted = sorted(evs, key=lambda x: x.timestamp, reverse=True)
-        # 快照原始值
-        orig_strength = a.anchor_strength
-        # 模拟有/无最新证据时的 stability 差
-        old_count = len(evs_sorted) - 1
-        new_count = len(evs_sorted)
-        old_strength = a.recalc_strength(old_count)
-        new_strength = a.recalc_strength(new_count)
-        drifts.append(abs(new_strength - old_strength))
-        # 还原
-        a.anchor_strength = orig_strength
+        with temp_attr(a, "anchor_strength", a.anchor_strength):
+            old_count = len(evs_sorted) - 1
+            new_count = len(evs_sorted)
+            old_strength = a.recalc_strength(old_count)
+            new_strength = a.recalc_strength(new_count)
+            drifts.append(abs(new_strength - old_strength))
     return sum(drifts) / len(drifts) if drifts else 0.0
 
 
@@ -152,7 +155,7 @@ def generalization_erosion_entropy(state: WorkspaceState) -> float:
             for j in range(i + 1, len(evs)):
                 if evs[i].content and evs[j].content:
                     from .workspace import _keyword_overlap
-                    overlaps.append(_keyword_overlap(evs[i].content, evs[j].content))
+                    overlaps.append(_keyword_overlap(evs[i].content, evs[j].content, state.overlap_cache))
         if overlaps:
             avg_overlap = sum(overlaps) / len(overlaps)
             # 重叠度越低 → 崩塌熵越高

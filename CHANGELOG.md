@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.6.0 (2026-07-13) — CPE 融合 + 主动自精炼 + 策略层
+
+### 核心升级
+- **CPE 融合（CPE-fused）**：能力侵蚀检测（`CPERegularizer`）与自组织记忆深度融合，新证据自动评估侵蚀风险并施加正则保护
+- **主动自精炼（proactive）**：`SelfRefineEngine` 正式导出，支持证据驱动的主动精炼与回流
+
+### 新增能力（CLI / API）
+- 自精炼：`self-refine` — 证据驱动主动精炼
+- 策略层：`strategy-health` / `strategy-advice` — 锚点策略健康度与针对性建议
+- 能力侵蚀：`cpe-check` / `cpe-scan` / `cpe-status` — 逐点检查 / 全量扫描 / 状态总览
+- 关系建模：`relate` / `relation-list` — 锚点间关联（`AnchorRelation`）
+- 记忆与冲突：`memory-add` / `conflict-resolve` — 手动结晶与冲突消解
+- 锚点描述：`anchor-describe` — 回填 / 设定锚点描述
+- `version` 命令打印当前版本
+
+### 熵模型扩展（八维）
+- `entropy.py` 新增 `anchor_drift` / `conflict_density` / `evidence_fragmentation` / `activity_gap` / `value_decay_entropy` / `strength_entropy` / `retrospective_decay_entropy` / `behavioral_drift_entropy`，认知健康度量更细
+
+### 工程
+- 包内导入统一为相对导入；零外部依赖（仅 click + pyyaml）
+- 测试扩展：`test_entropy.py` / `test_workspace.py`
+- 最低 Python 由 3.9 提升至 **3.10**（`list[str] | None` 等 3.10 语法）
+
 ## v0.5.4 (2026-07-12) — 锚点自进化补强 + bug 修复（跳过被 PyPI yank 的 0.5.3）
 
 ### 修复
