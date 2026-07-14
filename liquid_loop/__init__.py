@@ -6,5 +6,5 @@ from .workspace import (
     AuditChain, CPERegularizer, SelfRefineEngine,
     rhythmic_retrieve,
 )
-from .storage import load, save
+from .storage import load, save, locked_state
 from .entropy import calculate, calculate_detail, calculate as calculate_entropy

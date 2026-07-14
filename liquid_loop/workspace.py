@@ -262,6 +262,10 @@ class WorkspaceState:
                 target = next((a for a in self.anchors if a.id == anchor), None)
         if not target:
             return None
+        # 幂等去重：同锚点+同内容+同 agent 已存在则复用，防止重复证据膨胀（mesh 重试/高频喂入）
+        for ex in self.evidences:
+            if ex.anchor_id == target.id and ex.content == content and ex.agent_id == agent_id:
+                return ex
         e = Evidence(
             id=uid(), anchor_id=target.id, content=content,
             quality=quality, timestamp=now(), agent_id=agent_id,
