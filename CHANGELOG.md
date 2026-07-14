@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.6.3 (2026-07-14) — PEEK 预算稳态 + SEAL 双优化（学术标杆落地）
+
+### 新增能力
+- **认知预算稳态器 `cognitive_budget.py`（落地 PEEK, arXiv:2604.09932 固定预算驱逐）**：
+  - 三模块蒸馏并适配液环：`Distiller`（evidence.weight + anchor.value_score + recency → 价值）、`Cartographer`（价值 × 访问热度 × 流动性 → 重要性）、`Evictor`（超预算驱逐最低重要性证据）。
+  - 驱逐 = **冷归档**（`Evidence.archived=True`，从活跃检索集移出），**零丢失**、审计链完整，呼应液环零向量/零丢失哲学。
+  - 预算来源环境变量 `LIQUID_EVIDENCE_BUDGET`（默认 0 = 不限制）；每次 `add_evidence` 自动触发 `_stabilize_budget()`。
+- **SEAL 失败诊断双优化（落地 SEAL, arXiv:2605.24426 协同进化）**：
+  - `SelfRefineEngine.diagnose()`：失败探测归因到锚点，判定 `retrieval`（召回失败→boost_stability）或 `reason`（推理失败→downweight_noise）。
+  - `SelfRefineEngine.apply_strategy()`：策略侧调参（修复确认 +0.1 stability / 噪声 -0.1），与原有 memory 侧 `repair` 构成**双优化**闭环。
+  - `run()` 现串起 probe→verify→诊断→双优化，返回含 `diagnoses` / `strategy_actions`。
+
+### 与科研方向映射
+- PEEK 预算稳态 → **稳态**方向（记忆系统维持预算稳态而非无限膨胀，防熵爆）。
+- SEAL 双优化 → **智能体意识**方向（自洽性：失败→诊断→双侧面修复，强化原级自我意识自洽闭环）。
+
+### 工程
+- 测试：`tests/test_peek_seal.py` 7 例（PEEK 3 + SEAL 4），全量 24 passed。
+- 版本号 bump 至 0.6.3（包名保持 `liquid_loop`）。
+
 ## v0.6.2 (2026-07-14) — 跨锚点误结晶修复 + 文档校正
 
 ### 核心修复

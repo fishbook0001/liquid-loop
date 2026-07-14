@@ -9,6 +9,8 @@ import os
 import re
 from collections import Counter
 
+from .cognitive_budget import CognitiveBudgetStabilizer
+
 
 def now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -149,6 +151,7 @@ class Evidence:
     timestamp: str = field(default_factory=now)
     weight: float = 1.0
     quality: str = "normal"
+    archived: bool = False  # 预算超额冷归档标记（PEEK 落地，零丢失）
 
 
 @dataclass
@@ -266,11 +269,18 @@ class WorkspaceState:
         return e
 
     def _on_evidence_added(self, anchor_id: str):
-        """证据添加后的统一后处理：衰减→成核→稳定性刷新→冲突检测"""
+        """证据添加后的统一后处理：衰减→成核→稳定性刷新→冲突检测→预算稳态"""
         self._decay_anchor(anchor_id)
         self._nucleate(anchor_id)
         self._recalc_anchor(anchor_id)
         self._detect_conflicts(anchor_id)
+        self._stabilize_budget()
+
+    def _stabilize_budget(self):
+        """认知预算稳态（PEEK 落地）：超预算时冷归档最低价值证据。默认无预算不动作。"""
+        result = CognitiveBudgetStabilizer(self).stabilize()
+        if result.get("evicted", 0) > 0:
+            self.updated_at = now()
 
     def _decay_anchor(self, anchor_id: str):
         for e in self.evidences:
@@ -851,6 +861,50 @@ class SelfRefineEngine:
                     repairs.append(f"REPAIR: 为锚点[{target_anchor.name}]新增evidence: {gold[:40]}")
         return repairs
 
+    # ── SEAL 落地（arXiv:2605.24426 失败诊断双优化）──
+    def diagnose(self, failure: Dict[str, Any]) -> Dict[str, Any]:
+        """SEAL 诊断：失败探测归因到锚点，判定失败类型。
+
+        fail_type:
+          retrieval  召回失败（记忆存在但未检索到）→ 策略侧 boost_stability
+          reason     推理失败（检索到但判断不中）   → 策略侧 downweight_noise
+        """
+        reason = failure.get("reason", "")
+        if "检索" in reason or "无相关" in reason:
+            fail_type = "retrieval"
+        else:
+            fail_type = "reason"
+        source = failure.get("source", "")
+        target = None
+        if source:
+            target = next((a for a in self.state.anchors if a.id == source), None)
+            if not target:
+                ev = next((e for e in self.state.evidences if e.id == source), None)
+                if ev:
+                    target = next((a for a in self.state.anchors if a.id == ev.anchor_id), None)
+        if fail_type == "retrieval":
+            tune = "boost_stability"
+            root = "召回失败：记忆存在但未检索到（权重/描述召回不足）"
+        else:
+            tune = "downweight_noise"
+            root = "推理失败：检索到但关键词判断不中（噪声/描述歧义）"
+        return {"fail_type": fail_type, "target_anchor": target.id if target else None,
+                "root_cause": root, "tune": tune}
+
+    def apply_strategy(self, diag: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """SEAL 双优化 - 策略侧：修复确认→boost_stability；噪声→downweight。"""
+        if not diag.get("target_anchor"):
+            return []
+        a = next((x for x in self.state.anchors if x.id == diag["target_anchor"]), None)
+        if not a:
+            return []
+        if diag["tune"] == "boost_stability":
+            a.stability = min(1.0, round(a.stability + 0.1, 3))
+            return [{"op": "boost_stability", "anchor": a.name, "new_stability": a.stability}]
+        else:
+            a.stability = max(0.1, round(a.stability - 0.1, 3))
+            return [{"op": "downweight_noise", "anchor": a.name, "new_stability": a.stability}]
+
     def run(self, evidence_ids: List[str] = None) -> Dict[str, Any]:
         """执行完整后向自进化周期。"""
         probes = self.generate_probes(evidence_ids)
@@ -862,10 +916,15 @@ class SelfRefineEngine:
         failures = [r for p, r in zip(probes, results)
                     if not r.get("passed") and p.get("type") != "overview"]
         repairs = self.repair(failures)
+        # SEAL 双优化 - 策略侧：诊断失败 → 调锚点 stability
+        diagnoses = [self.diagnose(f) for f in failures]
+        strategy_actions = []
+        for d in diagnoses:
+            strategy_actions.extend(self.apply_strategy(d))
         self.state.self_refine_probes = probes
         self.state.self_refine_results = results
         self.state.self_refine_repair_count += len(repairs)
-        return {"total": len(probes), "passed": passed, "failed": len(failures), "pass_rate": round(passed / len(probes), 2), "repairs": repairs, "failed_details": [{"q": r.get("question", "")[:60], "reason": r.get("reason", "")} for r in failures[:5]]}
+        return {"total": len(probes), "passed": passed, "failed": len(failures), "pass_rate": round(passed / len(probes), 2), "repairs": repairs, "diagnoses": diagnoses, "strategy_actions": strategy_actions, "failed_details": [{"q": r.get("question", "")[:60], "reason": r.get("reason", "")} for r in failures[:5]]}
 
 
 # ==============================================================================
