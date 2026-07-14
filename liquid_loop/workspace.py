@@ -153,6 +153,7 @@ class Evidence:
     weight: float = 1.0
     quality: str = "normal"
     archived: bool = False  # 预算超额冷归档标记（PEEK 落地，零丢失）
+    agent_id: str = ""  # 多智能体共用：写入者标识（共用机制，缺省=legacy/单实例）
 
 
 @dataclass
@@ -162,6 +163,8 @@ class Memory:
     formed_at: str = field(default_factory=now)
     evidence_ids: list[str] = field(default_factory=list)
     confidence: float = 0.0
+    scope: str = "private"  # 结晶来源: private(同 agent≥2一致) / consensus(跨 distinct owner≥2一致)
+    contributors: list[str] = field(default_factory=list)  # 参与成核的 agent_id 列表
 
 
 @dataclass
@@ -243,10 +246,11 @@ class WorkspaceState:
         self.updated_at = now()
         return a
 
-    def add_evidence(self, anchor: str, content: str, quality: float = 1.0) -> Optional[Evidence]:
+    def add_evidence(self, anchor, content: str, quality: float = 1.0, agent_id: str = "") -> Optional[Evidence]:
         """向指定锚点添加一条证据。
 
         anchor 参数兼容：锚点名称(str) | 锚点ID(str) | Anchor对象
+        agent_id：多智能体共用写入者标识（缺省空=legacy/单实例）
         """
         target = None
         if isinstance(anchor, Anchor):
@@ -260,7 +264,7 @@ class WorkspaceState:
             return None
         e = Evidence(
             id=uid(), anchor_id=target.id, content=content,
-            quality=quality, timestamp=now(),
+            quality=quality, timestamp=now(), agent_id=agent_id,
         )
         self.evidences.append(e)
         target.evidence_ids.append(e.id)
@@ -289,31 +293,68 @@ class WorkspaceState:
                 e.weight = max(e.weight * 0.95, 0.1)
 
     def _nucleate(self, anchor_id: str):
-        """成核：同锚点下 >= 2 条一致证据形成记忆结晶。
+        """双轨成核（多智能体共用机制）：
 
-        复合键判定：查重限定在当前锚点内（(anchor_id, content)），避免跨锚点
-        同 content 证据被错误吞掉或并入同一结晶（P0 跨锚点误结晶修复, v0.6.2）。
+        - private 轨：同一 agent_id 下 >= 2 条一致证据 -> scope=private 结晶
+        - consensus 轨：同一 content 被 >= 2 个 distinct agent_id 证据支持 -> scope=consensus 结晶
+
+        复合键 (anchor_id, content, scope) 防跨锚点/跨轨污染。
+        兼容 legacy：agent_id 为空视为单实例私有（走 private 轨，contributors=["legacy"]）。
         """
         group = [e for e in self.evidences if e.anchor_id == anchor_id]
         if len(group) < 2:
             return
-        # 本锚点已结晶的 content 集合（复合键判定，杜绝跨锚点污染）
-        crystallized_contents: set[str] = set()
+        # 已结晶键集合（复合键判定，杜绝跨锚点/跨轨污染）
+        crystallized_keys: set = set()
         for m in self.memories:
             for eid in m.evidence_ids:
                 ev = next((e for e in self.evidences if e.id == eid), None)
                 if ev is not None and ev.anchor_id == anchor_id:
-                    crystallized_contents.add(m.content)
+                    crystallized_keys.add((m.content, m.scope))
                     break
-        content_counts = Counter(e.content for e in group)
-        for content, count in content_counts.items():
-            if count >= 2 and content not in crystallized_contents:
-                evidence_ids = [e.id for e in group if e.content == content]
-                confidence = min(count / len(group), 1.0)
+        from collections import defaultdict
+        # ── private 轨：按 agent_id 分组，组内同 content >= 2 ──
+        by_agent: dict = defaultdict(list)
+        for e in group:
+            by_agent[e.agent_id if e.agent_id else "legacy"].append(e)
+        for owner, evs in by_agent.items():
+            content_counts = Counter(e.content for e in evs)
+            for content, count in content_counts.items():
+                if count >= 2 and (content, "private") not in crystallized_keys:
+                    evidence_ids = [e.id for e in evs if e.content == content]
+                    confidence = min(count / len(evs), 1.0)
+                    self.memories.append(Memory(
+                        content=content,
+                        evidence_ids=evidence_ids,
+                        confidence=confidence,
+                        scope="private",
+                        contributors=[owner],
+                    ))
+        # ── consensus 轨：跨 distinct owner 同 content >= 2 ──
+        owners_by_content: dict = defaultdict(set)
+        for e in group:
+            if not e.agent_id:
+                continue  # legacy 不参与共识轨（无法跨主体）
+            owners_by_content[e.content].add(e.agent_id)
+        for content, owners in owners_by_content.items():
+            if len(owners) < 2:
+                continue
+            # 已存在的共识结晶：把新一致方并入 contributors（动态扩展，支撑三方+ CCI 计量）
+            existing = next((m for m in self.memories if m.scope == "consensus" and m.content == content), None)
+            if existing is not None:
+                merged = set(existing.contributors) | owners
+                if merged != set(existing.contributors):
+                    existing.contributors = sorted(merged)
+                continue
+            if (content, "consensus") not in crystallized_keys:
+                evidence_ids = [e.id for e in group if e.content == content and e.agent_id in owners]
+                confidence = min(len(owners) / 2.0, 1.0)
                 self.memories.append(Memory(
                     content=content,
                     evidence_ids=evidence_ids,
                     confidence=confidence,
+                    scope="consensus",
+                    contributors=sorted(owners),
                 ))
         # 成核后触发自动描述回流（仅当描述为空）
         self._auto_describe_anchor(anchor_id)
