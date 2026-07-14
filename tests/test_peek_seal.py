@@ -71,9 +71,12 @@ def test_seal_diagnose_reason_downweights():
     failure = {"source": a.id, "reason": "关键词不匹配，gold=稳态"}
     diag = eng.diagnose(failure)
     assert diag["fail_type"] == "reason"
-    before = a.stability
     eng.apply_strategy(diag)
-    assert a.stability == max(0.1, round(before - 0.1, 3))
+    # v0.6.4：改 seal_adjust 层，不直接动 stability
+    assert a.seal_adjust == -0.1
+    st.add_evidence(a, "补充证据")  # 触发 _recalc 合成
+    assert a.stability == round(min(1.0, max(0.1, a.base_stability + a.seal_adjust)), 3)
+    assert a.stability < a.base_stability  # 负增量生效，自洽性降权
 
 
 def test_seal_apply_strategy_boost():
@@ -81,10 +84,12 @@ def test_seal_apply_strategy_boost():
     a = st.add_anchor("液环")
     eng = SelfRefineEngine(st)
     diag = {"fail_type": "retrieval", "target_anchor": a.id, "tune": "boost_stability"}
-    before = a.stability
     acts = eng.apply_strategy(diag)
     assert acts[0]["op"] == "boost_stability"
-    assert a.stability == min(1.0, round(before + 0.1, 3))
+    assert a.seal_adjust == 0.1
+    st.add_evidence(a, "补充证据")  # 触发 _recalc 合成
+    assert a.stability == round(min(1.0, max(0.1, a.base_stability + a.seal_adjust)), 3)
+    assert a.stability >= a.base_stability  # 正增量生效
 
 
 def test_seal_run_integration_dual_optimize(monkeypatch):

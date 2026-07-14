@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.6.4 (2026-07-14) — SEAL 双优化修复（解 v0.6.3 假落地）
+- 修复：SelfRefineEngine.apply_strategy 改锚点 `seal_adjust` 自评层（Anchor 新增字段），`_recalc_anchor` 合成 `stability = base + seal_adjust`，SEAL 调整不再被下次 `add_evidence` 覆盖（E8 暴露 v0.6.3 为假落地）。
+- 测试：新增 `tests/test_seal_persistence.py`（3 例），全量 pytest **27 passed**。
+- E8 实验：class-1 脆性锚点喂 SelfRefine，结晶率 S 曲线（脆性组比稳固组晚 5 轮结晶=收敛慢）；暴露 stability 随记忆增长单调递减（decay 双因拖垮 base，标 v0.6.x 待办，本次未改）。
+
 ## v0.6.3 (2026-07-14) — PEEK 预算稳态 + SEAL 双优化（学术标杆落地）
 
 ### 新增能力

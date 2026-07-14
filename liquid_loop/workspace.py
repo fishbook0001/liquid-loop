@@ -86,6 +86,7 @@ class Anchor:
     last_accessed: str = ""
     value_score: float = 1.0
     anchor_strength: float = 1.0
+    seal_adjust: float = 0.0  # SEAL 自评层增量；_recalc 合成进 stability，不被覆盖（解 v0.6.3 假落地）
 
     def decay_value(self, factor: float = 0.95, evidence_count: int = 0) -> float:
         if not self.created_at:
@@ -370,7 +371,10 @@ class WorkspaceState:
         avg_weight = sum(e.weight for e in group) / len(group)
         for a in self.anchors:
             if a.id == anchor_id:
-                a.stability = avg_weight
+                # base = 证据权重均值；stability = base + SEAL 自评层（seal_adjust 不被覆盖）
+                base = avg_weight
+                a.base_stability = base
+                a.stability = round(min(1.0, max(0.1, base + a.seal_adjust)), 3)
                 evidence_count = len(group)
                 a.decay_value(evidence_count=evidence_count)
                 a.recalc_strength(evidence_count)
@@ -899,11 +903,12 @@ class SelfRefineEngine:
         if not a:
             return []
         if diag["tune"] == "boost_stability":
-            a.stability = min(1.0, round(a.stability + 0.1, 3))
-            return [{"op": "boost_stability", "anchor": a.name, "new_stability": a.stability}]
+            a.seal_adjust = min(0.5, round(a.seal_adjust + 0.1, 3))
         else:
-            a.stability = max(0.1, round(a.stability - 0.1, 3))
-            return [{"op": "downweight_noise", "anchor": a.name, "new_stability": a.stability}]
+            a.seal_adjust = max(-0.5, round(a.seal_adjust - 0.1, 3))
+        base = getattr(a, "base_stability", a.stability)
+        projected = round(min(1.0, max(0.1, base + a.seal_adjust)), 3)
+        return [{"op": diag["tune"], "anchor": a.name, "seal_adjust": a.seal_adjust, "projected_stability": projected}]
 
     def run(self, evidence_ids: List[str] = None) -> Dict[str, Any]:
         """执行完整后向自进化周期。"""
