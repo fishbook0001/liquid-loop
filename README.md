@@ -108,6 +108,26 @@ liquid-loop snapshot
 
 ---
 
+## MESH 集成（多智能体共识）
+
+液环从 v0.7.0 起内置官方 MESH 集成 `liquid_loop.mesh`，把"多智能体共识协议"落地为可复用代码，作为 agent-mesh 节点的标准接入层。
+
+```python
+from liquid_loop.mesh import validate_evidence, compute_cci, cognitive_health, fetch_state
+
+# agent 写入前契约自检（零向量：content 必须精确字符串，禁 embedding）
+ok, errs = validate_evidence({"agent_id": "vera", "content": "用户偏好简洁输出"})
+
+# 从 8790 拉取记忆状态，算主体间性共识指数 CCI
+items = fetch_state("http://127.0.0.1:8790")
+health = cognitive_health(items)
+print(health["CCI"], health["consensus_crystals"])
+```
+
+零向量哲学：一致性判定走**结构化精确相等 + 审计链哈希**，绝不引入任何 embedding / 相似度。规范详见 `mesh/liquid_loop_mesh_v2_spec.md`。
+
+---
+
 ## 架构对比
 
 ```
@@ -155,6 +175,7 @@ liquid-loop/
 │   ├── workspace.py     # 核心数据模型 + AuditChain + auto_classify + decay
 │   ├── storage.py       # JSON 持久化 + 审计链写入
 │   ├── entropy.py       # 四维熵值计算
+│   ├── mesh/            # MESH v2 多智能体共识协议集成（validate_evidence / compute_cci / ...）
 │   └── cli.py           # Click CLI (11 命令)
 ├── examples/
 │   └── quickstart.py
@@ -181,7 +202,7 @@ pytest -v
 ## 路线图
 
 - [ ] 语义一致性结晶（嵌入相似度替代精确匹配）
-- [ ] 多 Agent 液环耦合
+- [x] 多 Agent 液环耦合（`liquid_loop.mesh` v2 共识协议，2026-07-15 落地）
 - [ ] LX 扩展：世界模型预测纳入液环
 - [ ] LoCoMo / LongMemEval 基准对比
 - [ ] 边缘端部署优化（<50KB）

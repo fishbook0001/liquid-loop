@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.7.0 (2026-07-15) — MESH v2 多智能体共识协议集成（正式发布）
+- 新增：`liquid_loop.mesh` 官方 MESH 集成子包（原 `mesh/liquid_loop_mesh_v2.py` 迁入，随 pip 包发布）。
+- 能力：结构化证据 schema 自检 `validate_evidence`、双向契约合规 `check_contract`、主体间性共识指数 `compute_cci`、统一认知健康仪表盘 `cognitive_health`、冲突检测 `detect_conflict`、从 8790 REST 拉取状态 `fetch_state`。
+- 零向量哲学：一致性判定走结构化精确相等 + 审计链哈希，绝不引入 embedding / 相似度。
+- 顶层 `mesh/liquid_loop_mesh_v2.py` 保留为兼容薄壳（仍 `python3 mesh/liquid_loop_mesh_v2.py` 连 8790 打印认知健康报告）。
+- 发布：GitHub tag v0.7.0 + PyPI Trusted Publishing（GitHub Actions OIDC，无 token）。
+
 ## v0.6.4 (2026-07-14) — SEAL 双优化修复（解 v0.6.3 假落地）
 - 修复：SelfRefineEngine.apply_strategy 改锚点 `seal_adjust` 自评层（Anchor 新增字段），`_recalc_anchor` 合成 `stability = base + seal_adjust`，SEAL 调整不再被下次 `add_evidence` 覆盖（E8 暴露 v0.6.3 为假落地）。
 - 测试：新增 `tests/test_seal_persistence.py`（3 例），全量 pytest **27 passed**。
