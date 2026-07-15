@@ -156,6 +156,8 @@ class Evidence:
     quality: str = "normal"
     archived: bool = False  # 预算超额冷归档标记（PEEK 落地，零丢失）
     agent_id: str = ""  # 多智能体共用：写入者标识（共用机制，缺省=legacy/单实例）
+    relation: str = "support"  # 反证轨：evidence 与 memory 的关系 "support"(一致) | "contradiction"(冲突) | ""(legacy 视为 support)
+    target_memory_id: str = ""  # relation=contradiction 时，可选显式指向被反驳的 memory（缺省=同锚点最近结晶）
 
 
 @dataclass
@@ -167,6 +169,11 @@ class Memory:
     confidence: float = 0.0
     scope: str = "private"  # 结晶来源: private(同 agent≥2一致) / consensus(跨 distinct owner≥2一致)
     contributors: list[str] = field(default_factory=list)  # 参与成核的 agent_id 列表
+    # ── v0.8 反证轨 + 时间动力学 ──
+    stability: float = 1.0  # 反证轨稳定性：一致增稳、冲突降稳（0~1）
+    support_count: int = 0  # 支持该 memory 的证据数
+    contradiction_count: int = 0  # 反驳该 memory 的证据数
+    last_reinforced: str = ""  # 最近一次被 support 证据强化的时间戳（时间动力学用）
 
 
 @dataclass
@@ -249,16 +256,15 @@ class WorkspaceState:
         return a
 
     def add_evidence(self, anchor, content: str, quality: float = 1.0, agent_id: str = "",
-                     dedup: bool = False) -> Optional[Evidence]:
+                     dedup: bool = False, relation: str = "support",
+                     target_memory_id: str = "") -> Optional[Evidence]:
         """向指定锚点添加一条证据。
 
         anchor 参数兼容：锚点名称(str) | 锚点ID(str) | Anchor对象
         agent_id：多智能体共用写入者标识（缺省空=legacy/单实例）
-        dedup：幂等去重开关（默认 False）。
-            - False（默认，核心语义）：同内容可重复写入——"≥2 条一致证据自动结晶"依赖此行为
-              （README quickstart / 双轨成核 / 理论定义）。
-            - True（mesh/API 层显式启用）：同锚点+同内容+同 agent 已存在则复用，防网络重试/高频喂入膨胀。
-              幂等应由 mesh/API 层按需开启，核心模型默认不吞掉"重复观察"这一结晶信号。
+        dedup：幂等去重开关（默认 False，核心语义允许重复写入以触发结晶）。
+        relation：反证轨关系 "support"(一致, 默认) | "contradiction"(冲突) —— 见 v0.8 反证轨。
+        target_memory_id：relation="contradiction" 时可选显式指向被反驳的 memory。
         """
         target = None
         if isinstance(anchor, Anchor):
@@ -278,6 +284,7 @@ class WorkspaceState:
         e = Evidence(
             id=uid(), anchor_id=target.id, content=content,
             quality=quality, timestamp=now(), agent_id=agent_id,
+            relation=relation, target_memory_id=target_memory_id,
         )
         self.evidences.append(e)
         target.evidence_ids.append(e.id)
@@ -287,9 +294,10 @@ class WorkspaceState:
         return e
 
     def _on_evidence_added(self, anchor_id: str):
-        """证据添加后的统一后处理：衰减→成核→稳定性刷新→冲突检测→预算稳态"""
+        """证据添加后的统一后处理：衰减→成核→反证轨稳定性→冲突检测→预算稳态"""
         self._decay_anchor(anchor_id)
         self._nucleate(anchor_id)
+        self._update_memory_stability(anchor_id)
         self._recalc_anchor(anchor_id)
         self._detect_conflicts(anchor_id)
         self._stabilize_budget()
@@ -440,6 +448,77 @@ class WorkspaceState:
         self.memories.append(m)
         self.updated_at = now()
         return m
+
+    # ─────────────────────────────────────────────────────────────
+    # v0.8 反证轨 + 时间动力学（液态循环核心）
+    # ─────────────────────────────────────────────────────────────
+
+    def _update_memory_stability(self, anchor_id: str):
+        """反证轨：一致证据(support)增稳，冲突证据(contradiction)降稳。
+
+        稳定性 = support / (support + CONTRADICTION_WEIGHT * contradiction + 1)
+        - 同锚点下 content 相同的 support 证据计为支持
+        - relation="contradiction" 的证据计为反驳（显式 target_memory_id 或同锚点无指定则作用于该锚点结晶）
+        - 有 support 证据则刷新 last_reinforced（时间动力学强化信号）
+        """
+        CONTRADICTION_WEIGHT = 2.0
+        group = [e for e in self.evidences if e.anchor_id == anchor_id and not e.archived]
+        group_ids = {e.id for e in group}
+        anchor_memories = [m for m in self.memories
+                           if any(eid in group_ids for eid in m.evidence_ids)]
+        for m in anchor_memories:
+            supports = [e for e in group
+                        if e.relation in ("support", "") and e.content == m.content]
+            if m.id:
+                contradicts = [e for e in group
+                               if e.relation == "contradiction"
+                               and (e.target_memory_id == m.id or not e.target_memory_id)]
+            else:
+                contradicts = [e for e in group
+                               if e.relation == "contradiction" and not e.target_memory_id]
+            s = len(supports)
+            c = len(contradicts)
+            m.support_count = s
+            m.contradiction_count = c
+            m.stability = round(min(1.0, max(0.0,
+                                s / (s + CONTRADICTION_WEIGHT * c + 1))), 3)
+            if supports:
+                m.last_reinforced = max(e.timestamp for e in supports)
+
+    def step(self, dt: int = 1, decay_rate: float = 0.05):
+        """显式时间动力学步（v0.8 液态循环核心）：
+
+            M(t+1) = M(t) + reinforcement − decay − contradiction_penalty
+
+        - 每条证据按 (1−decay_rate)^dt 衰减权重（无强化则价值流失，下限 0.05）
+        - 每个 memory 按 support/contradiction 计数重算固有稳定性（矛盾惩罚持续作用）；
+          若本轮有 support 证据 → 稳定性恢复到固有值（强化）；否则按时间衰减（无强化流失）
+        - 重算锚点稳定性与审计更新时间
+        """
+        # 1. 证据权重时间衰减
+        for e in self.evidences:
+            if not e.archived:
+                e.weight = max(e.weight * ((1 - decay_rate) ** dt), 0.05)
+        # 2. 记忆稳定性：固有(计数驱动) + 时间衰减/强化
+        for a in self.anchors:
+            self._update_memory_stability(a.id)
+        last_step = getattr(self, "_last_step_at", "")
+        now_dt = datetime.now(timezone.utc)
+        for m in self.memories:
+            intrinsic = m.stability  # _update_memory_stability 已写入固有稳定性
+            # 强化 = 自上次 step 以来有过新 support 证据（last_reinforced 晚于上次 step）
+            reinforced = bool(m.last_reinforced) and (not last_step or m.last_reinforced > last_step)
+            if reinforced:
+                m.stability = intrinsic  # 被强化：恢复到固有稳定性
+            else:
+                # 无新强化：时间衰减，且不超过固有上限
+                m.stability = round(max(0.0, min(intrinsic,
+                                    m.stability * ((1 - decay_rate) ** dt))), 3)
+        self._last_step_at = now()
+        # 3. 重算锚点稳定性
+        for a in self.anchors:
+            self._recalc_anchor(a.id)
+        self.updated_at = now()
 
 
 # ==============================================================================

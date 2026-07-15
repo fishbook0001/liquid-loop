@@ -50,6 +50,58 @@ RED    (entropy ≥ 0.6)  — 需清理
 
 ---
 
+## v0.8 反证轨 + 时间动力学（液态循环核心）
+
+液环 v0.8 从"静态结晶"升级为**自调节记忆动力学**：记忆不是对象，而是过程。
+
+### 反证轨（Contradiction Track）
+
+证据可标记与记忆的关系，打破"一致即真"：
+
+```python
+from liquid_loop import WorkspaceState
+
+state = WorkspaceState()
+a = state.add_anchor("用户偏好", "红还是蓝")
+state.add_evidence(a, "用户喜欢红色")          # support (默认)
+state.add_evidence(a, "用户喜欢红色")          # 2 次一致 -> 结晶, stability≈0.67
+mem = state.memories[0]
+state.add_evidence(a, "用户喜欢蓝色",
+                   relation="contradiction",    # 冲突证据
+                   target_memory_id=mem.id)     # 显式指向被反驳的记忆
+# -> mem.stability 降到 ≈0.40（一致增稳 / 冲突降稳）
+```
+
+稳定性公式：`stability = support / (support + 2·contradiction + 1)`。
+`contradiction_weight=2.0` 使单条冲突的降稳效力 ≈ 两条支持，直接对抗**群体幻觉固化**。
+
+### 时间动力学 `state.step(dt)`
+
+显式演化步（记忆随时间衰减 / 被新证据强化）：
+
+```python
+# 无新支持证据时，时间推进使稳定性衰减
+state.step(dt=10, decay_rate=0.05)
+# M(t+1) = M(t) + reinforcement − decay − contradiction_penalty
+```
+
+- 每条证据权重按 `(1−decay_rate)^dt` 衰减（无强化则价值流失，下限 0.05）
+- 记忆在**自上次 step 以来获得新 support** 时恢复到固有稳定性（强化）；否则时间衰减且不超过固有上限
+
+### 实验验证（examples/experiments/，全部 PASS）
+
+| 实验 | 问题 | 结论 |
+|------|------|------|
+| **E2 错误记忆恢复** | 能否主动遗忘错误并恢复？ | 80%错误+20%真实 → 反证轨使错误 stability 0.67→0.30、正确升至 0.69 主导 ✅ |
+| **E3 多 Agent 冲突** | mesh v2 能否形成稳定共享认知？ | A support / B contradiction / C noise → 核心 claim 进入受争议稳定区(0.40)，噪声隔离 ✅ |
+| **E1 长期漂移** | 1000 轮随机注入是否收敛？ | 300 轮压测 → 48 记忆(≤池×3)、plateau、LEI GREEN、avg_stab 0.80 ✅ |
+
+```bash
+python3 examples/experiments/run_all.py   # 生成 REPORT_v0.8.json
+```
+
+---
+
 ## 快速开始
 
 ### 安装
@@ -228,9 +280,10 @@ pytest -v
 ## 路线图
 
 - [x] 多 Agent 液环耦合（`liquid_loop.mesh` v2 共识协议，2026-07-15 落地）
-- [ ] **[v0.8] 反证轨（Evidence Graph）**：Evidence 分 support / contradiction，一致增稳、冲突降稳，驱动 memory stability score（不再"一致即真"）
-- [ ] **[v0.8] 显式时间动力学**：`M(t+1) = M(t) + reinforcement − decay − contradiction_penalty`，让记忆成为"过程"而非"对象"（真正的液态循环）
-- [ ] **[v0.8] 三实验**：E2 错误记忆恢复（核心）→ E3 多 agent 冲突（mesh 价值）→ E1 长期漂移（压力测试）
+- [x] **[v0.8] 反证轨（Evidence Graph）**：Evidence 分 support / contradiction，一致增稳、冲突降稳，驱动 memory stability score（不再"一致即真"）
+- [x] **[v0.8] 显式时间动力学**：`M(t+1) = M(t) + reinforcement − decay − contradiction_penalty`，让记忆成为"过程"而非"对象"（真正的液态循环）
+- [x] **[v0.8] 三实验全 PASS**：E2 错误记忆恢复 → E3 多 agent 冲突 → E1 长期漂移（见上节）
+- [ ] **[v0.9 优化项]**：`_detect_conflicts` 由每证据 O(g²) 两两扫描改为增量/采样（大规模高频写入性能，非正确性）
 - [ ] LoCoMo / LongMemEval 基准对比
 - [ ] 边缘端部署优化（<50KB）
 

@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.8.0 (2026-07-15) — 反证轨（Contradiction Track）+ 时间动力学（Liquid Loop）
+
+> 本版落实 v0.7.1 路线图：从"静态结晶"升级为"自调节记忆动力学"。回应外部审计的三点核心建议
+> （反证轨 / 显式时间演化 / 可验证实验），实验顺序 E2→E3→E1，全部 PASS。
+
+- **反证轨（Evidence Graph）**：`Evidence` 新增 `relation`（"support" | "contradiction"）与
+  `target_memory_id`；`Memory` 新增 `stability` / `support_count` / `contradiction_count` /
+  `last_reinforced`。稳定性公式 `stability = support / (support + 2·contradiction + 1)`：
+  **一致增稳、冲突降稳**（非"一致即真"），直接对抗群体幻觉固化。
+- **时间动力学 `state.step(dt)`**：显式 `M(t+1) = M(t) + reinforcement − decay − contradiction_penalty`。
+  证据权重按 `(1−decay_rate)^dt` 衰减；记忆在获得新 support（自上次 step 起）时恢复到固有稳定性，
+  否则时间衰减且不超过固有上限——记忆是**过程**而非对象。
+- **三实验（examples/experiments/，全部 PASS）**：
+  - **E2 错误记忆恢复**（核心）：80% 错误 + 20% 真实注入 → 反证轨使错误记忆 stability 0.67→0.30、
+    正确记忆升至 0.69 主导，证明**主动遗忘错误 + 恢复**（非带衰减数据库）。
+  - **E3 多 Agent 冲突**（mesh v2 价值）：A support / B contradiction / C noise → 核心 claim 进入
+    受争议稳定区间(stability=0.40)，噪声隔离独立成核，LEI 全程 GREEN。
+  - **E1 长期漂移**（压力测试）：300 轮随机注入 → 48 条记忆（≤池×3）、末段增量 plateau=2、
+    LEI GREEN、平均 stability 0.80，证明自动收敛。
+- **已知优化项（非正确性）**：`_detect_conflicts` 为每证据加入时的 O(g²) 两两一致性扫描，大规模
+  高频写入需改为增量/采样；实验用 300 轮规避，已在报告标注。
+- **向后兼容**：新增字段均带默认值，`Evidence(**dict)` / `Memory(**dict)` 加载旧存档不破；38 单测全绿。
+
 ## v0.7.1 (2026-07-15) — 文档同步与发布质量修正（不扩功能）
 - **命名**：entropy 代码层保留 `calculate()`；README 补 **Liquid Entropy Index (LEI)** 语义澄清 —— system-stability deviation metric, inspired by entropy but not equivalent to thermodynamic entropy（避免物理熵误解，保留理论连续性；不采用 CDI）。
 - **文档同步**：README 熵表标注 LEI；新增八维机制说明；`calculate_entropy → calculate`、"四维 → 八维"漂移修正（承接前次）。

@@ -80,7 +80,7 @@ def main():
     print("=" * 50)
     print("\n下一步:")
     print("  - 运行 CLI: liquid-loop status")
-    print("  - 查看实验: python3 experiment/liquid_benchmark.py run E1")
+    print("  - 查看实验: python3 examples/experiments/run_all.py")
     print("  - 阅读论文框架: docs/液环论文框架.md")
 
 
