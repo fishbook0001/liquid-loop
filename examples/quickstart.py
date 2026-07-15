@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from liquid_loop import (
     WorkspaceState, Anchor, Evidence, Memory,
-    load, save, calculate_entropy,
+    load, save, calculate,
 )
 
 
@@ -30,11 +30,11 @@ def main():
 
     # ── 2. 添加锚点 ────────────────────────────────────────
     print("\n📌 步骤 1: 创建锚点")
-    anchor_id = state.add_anchor(
+    anchor = state.add_anchor(
         name="用户偏好",
         description="记录用户的交互偏好与约束"
     )
-    print(f"   ✅ 锚点已创建: 用户偏好 (id={anchor_id[:8]}...)")
+    print(f"   ✅ 锚点已创建: 用户偏好 (id={anchor.id[:8]}...)")
 
     # ── 3. 注入证据（自动触发衰减+结晶+稳定性重算） ──────────
     print("\n📝 步骤 2: 注入证据（第 2 条将触发结晶）")
@@ -47,7 +47,7 @@ def main():
     ]
 
     for i, content in enumerate(evidences, 1):
-        state.add_evidence(anchor_id, content)
+        state.add_evidence(anchor, content)
         print(f"   证据 #{i}: {content[:30]}...")
 
     # ── 4. 查看结晶记忆 ────────────────────────────────────
@@ -57,7 +57,7 @@ def main():
 
     # ── 5. 监控认知健康 ────────────────────────────────────
     print("\n📊 步骤 4: 认知健康度 (熵值)")
-    entropy = calculate_entropy(state)
+    entropy = calculate(state)
     status = "🟢 GREEN" if entropy < 0.3 else ("🟡 YELLOW" if entropy < 0.6 else "🔴 RED")
     print(f"   综合熵值(八维加权): {entropy:.4f} → {status}")
     print(f"   锚点稳定性: 用户偏好={state.anchors[0].stability:.2f}")
@@ -73,7 +73,7 @@ def main():
     print(f"   锚点数: {len(state2.anchors)}")
     print(f"   证据数: {len(state2.evidences)}")
     print(f"   结晶数: {len(state2.memories)}")
-    print(f"   熵值: {calculate_entropy(state2):.4f}")
+    print(f"   熵值: {calculate(state2):.4f}")
 
     print("\n" + "=" * 50)
     print("✅ Quickstart 完成！")

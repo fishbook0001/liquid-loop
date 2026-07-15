@@ -248,11 +248,17 @@ class WorkspaceState:
         self.updated_at = now()
         return a
 
-    def add_evidence(self, anchor, content: str, quality: float = 1.0, agent_id: str = "") -> Optional[Evidence]:
+    def add_evidence(self, anchor, content: str, quality: float = 1.0, agent_id: str = "",
+                     dedup: bool = False) -> Optional[Evidence]:
         """向指定锚点添加一条证据。
 
         anchor 参数兼容：锚点名称(str) | 锚点ID(str) | Anchor对象
         agent_id：多智能体共用写入者标识（缺省空=legacy/单实例）
+        dedup：幂等去重开关（默认 False）。
+            - False（默认，核心语义）：同内容可重复写入——"≥2 条一致证据自动结晶"依赖此行为
+              （README quickstart / 双轨成核 / 理论定义）。
+            - True（mesh/API 层显式启用）：同锚点+同内容+同 agent 已存在则复用，防网络重试/高频喂入膨胀。
+              幂等应由 mesh/API 层按需开启，核心模型默认不吞掉"重复观察"这一结晶信号。
         """
         target = None
         if isinstance(anchor, Anchor):
@@ -264,10 +270,11 @@ class WorkspaceState:
                 target = next((a for a in self.anchors if a.id == anchor), None)
         if not target:
             return None
-        # 幂等去重：同锚点+同内容+同 agent 已存在则复用，防止重复证据膨胀（mesh 重试/高频喂入）
-        for ex in self.evidences:
-            if ex.anchor_id == target.id and ex.content == content and ex.agent_id == agent_id:
-                return ex
+        # 幂等去重（仅当 dedup=True）：同锚点+同内容+同 agent 已存在则复用
+        if dedup:
+            for ex in self.evidences:
+                if ex.anchor_id == target.id and ex.content == content and ex.agent_id == agent_id:
+                    return ex
         e = Evidence(
             id=uid(), anchor_id=target.id, content=content,
             quality=quality, timestamp=now(), agent_id=agent_id,

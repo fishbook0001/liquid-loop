@@ -33,7 +33,7 @@
 | **Anchor** 锚点 | 晶种 | 认知关注点，有稳定性值 s ∈ [0,1] |
 | **Evidence** 证据 | 附着粒子 | 锚点下的具体观察，权重指数衰减 w×0.95ᵗ |
 | **Memory** 结晶 | 结晶体 | 2+ 条一致 Evidence 自动凝聚，有置信度 c |
-| **Entropy** 熵值 | 流体无序度 | 八维加权（锚点漂移 / 冲突密度 / 碎片 / 活跃间隔 / 价值衰减 / 锚定强度 / CPE 三维） |
+| **Entropy** 熵值 (LEI) | 流体无序度 | 八维加权（锚点漂移 / 冲突密度 / 碎片 / 活跃间隔 / 价值衰减 / 锚定强度 / CPE 三维） |
 
 **状态判定：**
 ```
@@ -41,6 +41,12 @@ GREEN  (entropy < 0.3)  — 认知健康
 YELLOW (0.3 ≤ entropy < 0.6) — 需关注
 RED    (entropy ≥ 0.6)  — 需清理
 ```
+
+> **关于 "Entropy" 的语义澄清 — Liquid Entropy Index (LEI)**
+>
+> 本项目中的 `entropy` 是 **Liquid Entropy Index (LEI): a system-stability deviation metric, inspired by entropy but NOT equivalent to thermodynamic entropy.**
+> 它不是物理熵 `S = -k Σ pᵢ log pᵢ`，而是对**系统状态偏离稳定流形程度**的综合度量——由八个可解释分量人工加权而成（锚点漂移 / 冲突密度 / 证据碎片 / 活跃间隔 / 价值衰减 / 锚定强度 + CPE 三维：回顾性衰退 / 策略漂移 / 泛化崩塌）。
+> 代码层函数名保留 `calculate()`（历史连续性）；文档 / 论文层一律以 **LEI** 指称，避免与热力学熵混淆。
 
 ---
 
@@ -128,6 +134,26 @@ print(health["CCI"], health["consensus_crystals"])
 
 ---
 
+## 定位：Self-Regulating Persistent Memory Dynamics
+
+液环的本质不是"AI 意识"，而是一套 **agent 系统的自调节持久记忆动力学（Self-Regulating Persistent Memory Dynamics for Agent Systems）**。`AuditChain + LEI(Entropy) + Memory decay` 三者组合形成闭环，使记忆从"外部管理"转向"内部自组织"：
+
+```
+   Input Evidence
+        ↓
+   Memory State  ←──────────────┐
+        ↓                        │
+   LEI Evaluation (八维熵)        │
+        ↓                        │
+   Decay / Reinforcement ────────┘
+        ↓
+   AuditChain (SHA256 链式追溯)
+```
+
+这比单独的 memory store 更接近一个可被实验检验的**动态系统**：输入驱动状态、熵评估稳定性、衰减/强化回流状态、审计链保证来源可信。
+
+---
+
 ## 架构对比
 
 ```
@@ -201,11 +227,14 @@ pytest -v
 
 ## 路线图
 
-- [ ] 语义一致性结晶（嵌入相似度替代精确匹配）
 - [x] 多 Agent 液环耦合（`liquid_loop.mesh` v2 共识协议，2026-07-15 落地）
-- [ ] LX 扩展：世界模型预测纳入液环
+- [ ] **[v0.8] 反证轨（Evidence Graph）**：Evidence 分 support / contradiction，一致增稳、冲突降稳，驱动 memory stability score（不再"一致即真"）
+- [ ] **[v0.8] 显式时间动力学**：`M(t+1) = M(t) + reinforcement − decay − contradiction_penalty`，让记忆成为"过程"而非"对象"（真正的液态循环）
+- [ ] **[v0.8] 三实验**：E2 错误记忆恢复（核心）→ E3 多 agent 冲突（mesh 价值）→ E1 长期漂移（压力测试）
 - [ ] LoCoMo / LongMemEval 基准对比
 - [ ] 边缘端部署优化（<50KB）
+
+> 零向量是液环的硬约束：一致性判定永不引入 embedding / 相似度（这正是液环要替代的方案）。
 
 ---
 

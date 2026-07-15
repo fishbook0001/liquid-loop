@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.7.1 (2026-07-15) — 文档同步与发布质量修正（不扩功能）
+- **命名**：entropy 代码层保留 `calculate()`；README 补 **Liquid Entropy Index (LEI)** 语义澄清 —— system-stability deviation metric, inspired by entropy but not equivalent to thermodynamic entropy（避免物理熵误解，保留理论连续性；不采用 CDI）。
+- **文档同步**：README 熵表标注 LEI；新增八维机制说明；`calculate_entropy → calculate`、"四维 → 八维"漂移修正（承接前次）。
+- **定位重述**：新增 "Self-Regulating Persistent Memory Dynamics for Agent Systems" 闭环段（AuditChain + LEI + Memory decay 形成动态系统闭环），淡化"AI 意识"宣传。
+- **路线图纠正**：删除与零向量哲学矛盾的"嵌入相似度结晶"死项；写实 v0.8 路线（反证轨 / 显式时间动力学 / 三实验 E2→E3→E1）。
+- **审计归档**：新增 `docs/AUDIT_RESPONSE_v0.7.1.md`，记录外部评审接收、版本差异校准与最终决策。
+- **范围纪律**：本版仅文档 / 发布质量，**零新机制**；反证轨与时间动力学留待 v0.8。
+
 ## v0.7.0 (2026-07-15) — MESH v2 多智能体共识协议集成（正式发布）
 - 新增：`liquid_loop.mesh` 官方 MESH 集成子包（原 `mesh/liquid_loop_mesh_v2.py` 迁入，随 pip 包发布）。
 - 能力：结构化证据 schema 自检 `validate_evidence`、双向契约合规 `check_contract`、主体间性共识指数 `compute_cci`、统一认知健康仪表盘 `cognitive_health`、冲突检测 `detect_conflict`、从 8790 REST 拉取状态 `fetch_state`。

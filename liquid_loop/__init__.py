@@ -1,5 +1,5 @@
-"""Liquid Loop — Workspace Cognitive Runtime v0.7.0 (CPE-fused, SEAL dual-opt, dual-track multi-agent, MESH v2 integration)"""
-__version__ = "0.7.0"
+"""Liquid Loop — Workspace Cognitive Runtime v0.7.1 (CPE-fused, SEAL dual-opt, dual-track multi-agent, MESH v2 integration)"""
+__version__ = "0.7.1"
 
 from .workspace import (
     WorkspaceState, Anchor, Evidence, Memory, Conflict,
