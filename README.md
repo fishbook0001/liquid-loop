@@ -186,9 +186,17 @@ print(health["CCI"], health["consensus_crystals"])
 
 ---
 
-## 定位：Self-Regulating Persistent Memory Dynamics
+## 定位：Self-Regulating Memory State Evolution
 
-液环的本质不是"AI 意识"，而是一套 **agent 系统的自调节持久记忆动力学（Self-Regulating Persistent Memory Dynamics for Agent Systems）**。`AuditChain + LEI(Entropy) + Memory decay` 三者组合形成闭环，使记忆从"外部管理"转向"内部自组织"：
+> **North-Star 公理（一切代码与论文围绕它校验）：**
+>
+> **Liquid Loop is not a memory storage mechanism; it is a self-regulating memory state evolution mechanism.**
+>
+> （液环不是一种记忆存储机制，而是一种自调节的记忆状态演化机制。）
+
+液环的本质不是"AI 意识 / 认知层"，而是一套 **agent 系统的自调节持久记忆动力学（Self-Regulating Persistent Memory Dynamics for Agent Systems）**。`AuditChain + LEI(Entropy) + Memory decay + Contradiction Track` 组合成闭环，使记忆从"外部管理"转向"内部自组织"。
+
+**边界（防止退化为"智能记忆管理器"）**：记忆状态本身是一个**演化对象**，而非被管理的数据对象。市场已有的"记忆评分 / 自动删除 / 权重调整"范式把记忆当被管理的数据——液环要保护的是 **memory homeostasis（记忆稳态）**：记忆在变化环境中经 输入→吸收→凝聚→稳定→衰减→重构，自身维持一致性，而非被外部规则调度。
 
 ```
    Input Evidence
