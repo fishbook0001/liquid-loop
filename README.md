@@ -54,7 +54,7 @@ pip install liquid-loop
 
 ### 3 分钟上手
 ```python
-from liquid_loop import WorkspaceState, load, save, calculate_entropy
+from liquid_loop import WorkspaceState, load, save, calculate
 
 # 1. 创建/加载工作区
 state = WorkspaceState()  # 或 load(Path("."))
@@ -72,7 +72,7 @@ for m in state.memories:
     print(f"结晶: {m.content[:50]}... (置信度={m.confidence:.2f})")
 
 # 5. 监控认知健康
-entropy = calculate_entropy(state)
+entropy = calculate(state)
 print(f"熵值: {entropy:.4f} → {'🟢GREEN' if entropy < 0.3 else '🟡YELLOW' if entropy < 0.6 else '🔴RED'}")
 
 # 6. 持久化
@@ -174,7 +174,7 @@ liquid-loop/
 │   ├── __init__.py      # 公共 API 导出
 │   ├── workspace.py     # 核心数据模型 + AuditChain + auto_classify + decay
 │   ├── storage.py       # JSON 持久化 + 审计链写入
-│   ├── entropy.py       # 四维熵值计算
+│   ├── entropy.py       # 八维熵值计算（含 CPE 三维）
 │   ├── mesh/            # MESH v2 多智能体共识协议集成（validate_evidence / compute_cci / ...）
 │   └── cli.py           # Click CLI (11 命令)
 ├── examples/
