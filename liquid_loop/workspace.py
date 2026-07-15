@@ -397,7 +397,11 @@ class WorkspaceState:
         阈值从环境变量 LIQUID_CONFLICT_THRESHOLD 读取（默认 0.2）。
         复用 CPE 泛化防线思路：证据间平均关键词重叠 < threshold 且 >= 3 条 -> 潜在冲突/漂移。
         保守处理：只标记'需人工确认'，不武断判相反（避免过度工程化误报）。
-        使用 overlap_cache 避免重复计算。
+
+        性能（v0.9）：原 O(g²) 全量成对扫描。相同 content 的两条证据重叠恒为 1.0，
+        对"内容分歧度"无信息量，故先按 content 去重为 distinct 集，只对 distinct 内容
+        求两两重叠 -> O(d²)（d = distinct content 数 ≤ g）。overlap_cache 复用。
+        语义更纯净：度量"不同论点间的分歧"，重复写入不再稀释冲突信号。
         """
         import os
         conflict_threshold = float(os.environ.get('LIQUID_CONFLICT_THRESHOLD', '0.2'))
@@ -405,11 +409,20 @@ class WorkspaceState:
         group = [e for e in self.evidences if e.anchor_id == anchor_id]
         if len(group) < 3:
             return
+        # ── O(g²) -> O(d²)：content 去重，相同 content 对的重叠恒为 1.0 不参与分歧度量 ──
+        distinct: list = []
+        seen: set = set()
+        for e in group:
+            if e.content and e.content not in seen:
+                seen.add(e.content)
+                distinct.append(e.content)
+        n = len(distinct)
+        if n < 2:
+            return
         overlaps = []
-        for i in range(len(group)):
-            for j in range(i + 1, len(group)):
-                if group[i].content and group[j].content:
-                    overlaps.append(_keyword_overlap(group[i].content, group[j].content, self.overlap_cache))
+        for i in range(n):
+            for j in range(i + 1, n):
+                overlaps.append(_keyword_overlap(distinct[i], distinct[j], self.overlap_cache))
         if not overlaps:
             return
         avg = sum(overlaps) / len(overlaps)

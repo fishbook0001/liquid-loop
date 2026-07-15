@@ -33,10 +33,10 @@
     },
     "memory_count": 3,
     "leI": {
-      "leI": 0.1381,
+      "leI": 0.2381,
       "band": "GREEN"
     },
-    "verdict": "  [PASS] 核心 claim 已结晶 — scope=private\n  [PASS] 核心 claim 进入受争议稳定区间 — stability=0.400 (support=6, contradict=4)\n  [PASS] 系统 LEI 未因冲突崩溃 — band=GREEN, LEI=0.1381\n  [PASS] 噪声 agent C 独立成核(隔离) — noise_mems=1\n  [PASS] 矛盾计数精确=A 的 support 不误计为矛盾 — contradiction_count=4\n  汇总: 5/5 通过",
+    "verdict": "  [PASS] 核心 claim 已结晶 — scope=private\n  [PASS] 核心 claim 进入受争议稳定区间 — stability=0.400 (support=6, contradict=4)\n  [PASS] 系统 LEI 未因冲突崩溃 — band=GREEN, LEI=0.2381\n  [PASS] 噪声 agent C 独立成核(隔离) — noise_mems=1\n  [PASS] 矛盾计数精确=A 的 support 不误计为矛盾 — contradiction_count=4\n  汇总: 5/5 通过",
     "all_pass": true
   },
   "E1": {

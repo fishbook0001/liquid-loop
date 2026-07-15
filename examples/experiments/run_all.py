@@ -1,7 +1,7 @@
-"""液环 v0.8 三实验运行器（飞哥指定顺序：E2 → E3 → E1）。
+"""液环 v0.9 三实验运行器（飞哥指定顺序：E2 → E3 → E1）。
 
 运行：python3 examples/experiments/run_all.py
-产物：examples/experiments/REPORT_v0.8.json + 控制台摘要
+产物：examples/experiments/REPORT_v0.9.json + 控制台摘要
 """
 from __future__ import annotations
 import json
@@ -19,7 +19,7 @@ from e1_drift import run as e1
 
 def main():
     print("#" * 60)
-    print("# 液环 v0.8 实验套件：E2(错误恢复) → E3(多体冲突) → E1(长期漂移)")
+    print("# 液环 v0.9 实验套件：E2(错误恢复) → E3(多体冲突) → E1(长期漂移)")
     print("#" * 60)
 
     r2 = e2()
@@ -42,7 +42,7 @@ def main():
         "E1": {k: v for k, v in r1.items() if k != "snapshots"},  # snapshots 单独存
         "E1_snapshots": r1["snapshots"],
     }
-    out = os.path.join(os.path.dirname(__file__), "REPORT_v0.8.json")
+    out = os.path.join(os.path.dirname(__file__), "REPORT_v0.9.json")
     with open(out, "w") as f:
         json.dump(report, f, ensure_ascii=False, indent=2)
     print(f"\n报告已写入: {out}")

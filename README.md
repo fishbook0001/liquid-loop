@@ -1,5 +1,7 @@
 # Liquid Loop
 
+![Liquid Loop Hero Banner](docs/assets/06-hero-banner.jpg)
+
 > **Self-Organizing Cognitive Memory for AI Agents** — Zero LLM dependency, pure Python implementation of the Liquid Loop theory.
 
 [![PyPI](https://img.shields.io/pypi/v/liquid-loop.svg)](https://pypi.org/project/liquid-loop/)
@@ -291,7 +293,8 @@ pytest -v
 - [x] **[v0.8] 反证轨（Evidence Graph）**：Evidence 分 support / contradiction，一致增稳、冲突降稳，驱动 memory stability score（不再"一致即真"）
 - [x] **[v0.8] 显式时间动力学**：`M(t+1) = M(t) + reinforcement − decay − contradiction_penalty`，让记忆成为"过程"而非"对象"（真正的液态循环）
 - [x] **[v0.8] 三实验全 PASS**：E2 错误记忆恢复 → E3 多 agent 冲突 → E1 长期漂移（见上节）
-- [ ] **[v0.9 优化项]**：`_detect_conflicts` 由每证据 O(g²) 两两扫描改为增量/采样（大规模高频写入性能，非正确性）
+- [x] **[v0.9] 冲突检测 O(g²)→O(d²)**：`_detect_conflicts` 按 content 去重后只对 distinct 内容求两两重叠（d≤g），overlap_cache 复用；语义更纯净（度量不同论点分歧），大规模高频写入性能提升（非正确性变更）
+- [x] **[v0.9] 液态算法正式落地**：时间动力学 / 反证轨 / 双轨成核在 v0.8 已实现并经 E1/E2/E3 三实验背书，v0.9 作为稳定版正式发布（README 顶部 Hero Banner 已上线）
 - [ ] LoCoMo / LongMemEval 基准对比
 - [ ] 边缘端部署优化（<50KB）
 
