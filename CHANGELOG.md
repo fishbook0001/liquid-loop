@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.9.1 (2026-07-15) — 固态 A2A 通道：TRAE MCP 桥接 + 双 Agent 运维硬化（集成发布）
+
+> 本版**核心库零算法改动**（v0.9.0 已含冲突 O(g²)→O(d²)、时间动力学、双轨成核、审计链、禁向量）。
+> 发布内容是把本轮"裁切 qwenpaw/marvis、接 trae、压测"的**可复用产物**固化进仓库。
+
+- **新增 `examples/trae_mesh_mcp/`**：把共享液环后端封装为纯 stdlib 的 **stdio JSON-RPC MCP server**，
+  暴露 `liquidloop_remember` / `liquidloop_recall` / `liquidloop_metrics` 三个工具。
+  经 TRAE（或任意 MCP 客户端）的 `--add-mcp` 注册即形成 **固化（solidified）A2A 通道**——客户端原生读写同一份共享记忆。
+  - **公共版可移植（重要）**：桥接地址走环境变量 `LIQUID_LOOP_BASE`（默认 `http://127.0.0.1:8790`）；
+    脚本/文档**不写死作者本地路径**，全部用占位符 + 环境变量（PY / MCP_SERVER / LL_SERVER / LL_MEM_ROOT / STRESS_PORT 等）。
+    **后端由用户自部署**，桥接仅做协议翻译、不内置 8790 服务，适配各用户不同的 agent / 部署拓扑。
+- **双 Agent 运维硬化（参考流程）**：
+  - 裁切 qwenpaw / marvis：停服务与进程 → 历史证据压缩打包（含 SHA256 清单）后**物理删除**原始数据。
+  - 后端 `com.marvis.memory.liquidloop` launchd 保活（含 `PYTHONPATH=~/liquid-loop` 与 `mcp` 依赖自检）。
+- **联合压测（Vera 直连 + trae 经桥）三关全 PASS**（脚本同目录 `stress_test.py` / `cleanup_stress.py`）：
+  - **T-A 零丢写**：400 并发写（vera 200 + trae 200）命中 400/400，零丢失、零写错。
+  - **T-B 共识幂等**：同 content 跨 distinct agent 并发写 → **恰好 1 条 consensus 结晶**（contributors 完整合并），
+    `nucleated` 在第 2+ 次写触发；private 轨按 `(content,scope)` 去重，不重复成核。
+  - **T-C 崩溃恢复**：隔离实例写入中 `kill -9` → `state.json` 仍合法、审计链完整，重启后服务恢复、证据无丢失。
+- **吞吐说明（非瓶颈）**：单节点共享记忆 ~11.9 ops/s（受每写全量落地 + 审计链重算限制），agent 级流量下充裕。
+- **零向量纪律**：桥接只做协议翻译，成核 / 共识 / 一致性判定仍走字符级精确相等 + 审计链哈希，无 embedding 引入。
+
 ## v0.8.0 (2026-07-15) — 反证轨（Contradiction Track）+ 时间动力学（Liquid Loop）
 
 > 本版落实 v0.7.1 路线图：从"静态结晶"升级为"自调节记忆动力学"。回应外部审计的三点核心建议

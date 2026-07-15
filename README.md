@@ -188,6 +188,30 @@ print(health["CCI"], health["consensus_crystals"])
 
 ---
 
+## 固态 A2A 通道（任意 MCP 客户端接入）
+
+把共享液环后端（地址由环境变量 `LIQUID_LOOP_BASE` 决定，默认 `http://127.0.0.1:8790`）封装成一个
+**stdio JSON-RPC 的 MCP server**，让任意支持 Model Context Protocol 的客户端（本例以 TRAE SOLO CN 演示）
+**原生读写同一份共享记忆**——这就是多 agent 间的固化（solidified）A2A 通道。
+
+> 后端说明：桥接只做协议翻译，**不内置 8790 服务**；后端由你自己部署（运行你自己的液环 SSE 服务，
+> 把地址通过 `LIQUID_LOOP_BASE` 传给桥接）。成核 / 共识 / 审计链全部由后端按液环理论执行。
+
+```bash
+# 在你的 MCP 客户端注册该 server（以 TRAE 为例；其 code CLI 路径随安装而异，请替换为你的路径）
+export PY=python3                                    # 任意 Python 3.10+ 解释器
+export SVR=examples/trae_mesh_mcp/mcp_server.py      # 本仓库内路径
+export LIQUID_LOOP_BASE=http://127.0.0.1:8790        # 改成你的后端地址
+"<path-to-your-trae-code-cli>" \
+  --add-mcp '{"servers":{"liquidloop-mesh":{"command":"'"$PY"'","args":["'"$SVR"'"]}}}'
+```
+
+桥接暴露 `liquidloop_remember` / `liquidloop_recall` / `liquidloop_metrics` 三个工具（写入**必须声明 `agent_id`**）。
+压测脚本与运维说明见 [`examples/trae_mesh_mcp/README.md`](examples/trae_mesh_mcp/README.md)
+（直连 + 经桥双路并发，零丢写 / 共识幂等 / 崩溃恢复三关全 PASS；所有路径走环境变量，适配不同部署拓扑）。
+
+---
+
 ## 定位：Self-Regulating Memory State Evolution
 
 > **North-Star 公理（一切代码与论文围绕它校验）：**
