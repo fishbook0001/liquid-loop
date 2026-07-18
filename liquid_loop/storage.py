@@ -65,6 +65,9 @@ def save(state: WorkspaceState, workspace_root: Path):
     data = asdict(state)
     # overlap_cache 仅为运行时熵计算缓存，键为 tuple，不可 JSON 序列化，且不具持久价值
     data.pop("overlap_cache", None)
+    # canon_fn 是运行时注入的可替换投影层（可能为不可序列化的函数），不持久化；
+    # 需用时由调用方重新注入。不 pop 会导致 json.dump 对函数崩溃（P0 隐患）。
+    data.pop("canon_fn", None)
     tmp = path.with_suffix(".tmp")
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
@@ -104,4 +107,5 @@ def _from_dict(data: dict) -> WorkspaceState:
         self_refine_probes=data.get("self_refine_probes", []),
         self_refine_results=data.get("self_refine_results", []),
         self_refine_repair_count=data.get("self_refine_repair_count", 0),
+        _iteration=data.get("_iteration", 0),  # Layer-1 修复：τ=有效迭代计数必须持久化，否则重启后归零→强化门控恒真→时间衰减失效
     )

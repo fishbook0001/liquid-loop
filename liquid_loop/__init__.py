@@ -1,5 +1,5 @@
-"""Liquid Loop — Workspace Cognitive Runtime v0.9.1 (反证轨 + 时间动力学, CPE-fused, SEAL dual-opt, dual-track multi-agent, MESH v2 integration)"""
-__version__ = "0.9.1"
+"""Liquid Loop — Workspace Cognitive Runtime v0.9.2 (Layer-1 修复: 结构化投影层 + 冲突惩罚持久化 + 有效迭代 τ)"""
+__version__ = "0.9.2"
 
 from .workspace import (
     WorkspaceState, Anchor, Evidence, Memory, Conflict,

@@ -89,6 +89,7 @@ class Anchor:
     value_score: float = 1.0
     anchor_strength: float = 1.0
     seal_adjust: float = 0.0  # SEAL 自评层增量；_recalc 合成进 stability，不被覆盖（解 v0.6.3 假落地）
+    conflict_penalty: float = 1.0  # 冲突惩罚累积乘子（Layer-1 修复：持久化，recalc/step/load 后保留）
 
     def decay_value(self, factor: float = 0.95, evidence_count: int = 0) -> float:
         if not self.created_at:
@@ -158,6 +159,7 @@ class Evidence:
     agent_id: str = ""  # 多智能体共用：写入者标识（共用机制，缺省=legacy/单实例）
     relation: str = "support"  # 反证轨：evidence 与 memory 的关系 "support"(一致) | "contradiction"(冲突) | ""(legacy 视为 support)
     target_memory_id: str = ""  # relation=contradiction 时，可选显式指向被反驳的 memory（缺省=同锚点最近结晶）
+    added_iter: int = 0  # 证据写入时的有效状态更新序号（τ=Effective Iteration）；强化门控据此判"自上次 step 以来是否有新 support 抵达"
 
 
 @dataclass
@@ -173,7 +175,8 @@ class Memory:
     stability: float = 1.0  # 反证轨稳定性：一致增稳、冲突降稳（0~1）
     support_count: int = 0  # 支持该 memory 的证据数
     contradiction_count: int = 0  # 反驳该 memory 的证据数
-    last_reinforced: str = ""  # 最近一次被 support 证据强化的时间戳（时间动力学用）
+    last_reinforced: str = ""  # 最近一次被 support 证据强化的时间戳（审计展示用）
+    last_reinforced_iter: int = 0  # 最近一次被 support 强化的迭代序号（τ=Effective Iteration，非墙钟；强化门控以此为准）
 
 
 @dataclass
@@ -238,6 +241,8 @@ class WorkspaceState:
     cpe_erosion_warnings: list[dict] = field(default_factory=list)  # 能力侵蚀告警
     cpe_regularization_count: int = 0                               # 累计正则化干预次数
     overlap_cache: dict = field(default_factory=dict)  # 缓存关键词重叠度
+    _iteration: int = 0  # 有效状态更新次数（τ = Effective Iteration）；时间动力学以之为时间变量而非墙钟
+    canon_fn: object = None  # 可替换 Projection Layer（Layer-1 修复）：注入后冲突检测复用此投影，None=旧关键词重叠回退
 
     # ── API 层：add_anchor / add_evidence（让 README 示例能跑通）──
 
@@ -285,6 +290,7 @@ class WorkspaceState:
             id=uid(), anchor_id=target.id, content=content,
             quality=quality, timestamp=now(), agent_id=agent_id,
             relation=relation, target_memory_id=target_memory_id,
+            added_iter=self._iteration,
         )
         self.evidences.append(e)
         target.evidence_ids.append(e.id)
@@ -392,51 +398,88 @@ class WorkspaceState:
                 anchor.description = best.content
 
     def _detect_conflicts(self, anchor_id: str):
-        """群内自洽检测：同锚点证据一致性过低 -> 生成 Conflict 记录并降锚点稳定性。
-        
-        阈值从环境变量 LIQUID_CONFLICT_THRESHOLD 读取（默认 0.2）。
-        复用 CPE 泛化防线思路：证据间平均关键词重叠 < threshold 且 >= 3 条 -> 潜在冲突/漂移。
-        保守处理：只标记'需人工确认'，不武断判相反（避免过度工程化误报）。
+        """群内自洽检测（Layer-1 修复：复用可替换 Projection Layer，惩罚持久化）。
 
-        性能（v0.9）：原 O(g²) 全量成对扫描。相同 content 的两条证据重叠恒为 1.0，
-        对"内容分歧度"无信息量，故先按 content 去重为 distinct 集，只对 distinct 内容
-        求两两重叠 -> O(d²)（d = distinct content 数 ≤ g）。overlap_cache 复用。
-        语义更纯净：度量"不同论点间的分歧"，重复写入不再稀释冲突信号。
+        旧实现用关键词重叠（Jaccard）近似"语义冲突"——本质是 Lexical Proxy，
+        会导致：① 对真异事实（关键词不重叠）误触发；② 对近重复（关键词高重叠）
+        反而不触发（反相关）；③ 自建一套不可替换的投影启发式（Hidden Projection Layer）。
+
+        修复：若 WorkspaceState.canon_fn 已注入，则冲突判定改用同一 Projection Layer——
+        两条 distinct content 证据，若投影到【同一 CP】但 relation 相反（一 support 一
+        contradiction）-> 真冲突；若投影同 CP 同 relation -> 近重复（不冲突）；
+        若投影不同 CP -> 即使关键词重叠也不算冲突（语义独立）。
+
+        惩罚持久化：锚点稳定性惩罚写入锚点字段 conflict_penalty（累积乘子），
+        _recalc_anchor 在合成 stability 时乘入，因此 load / step 重算后惩罚不丢失
+        （旧实现在 stability 字段上直接 *=0.9，被后续 recalc 覆盖，故不持久）。
+
+        canon_fn 为 None 时回退旧 _keyword_overlap 行为，保证生产向后兼容。
         """
         import os
         conflict_threshold = float(os.environ.get('LIQUID_CONFLICT_THRESHOLD', '0.2'))
-        
+
         group = [e for e in self.evidences if e.anchor_id == anchor_id]
-        if len(group) < 3:
+        if len(group) < 2:
             return
-        # ── O(g²) -> O(d²)：content 去重，相同 content 对的重叠恒为 1.0 不参与分歧度量 ──
         distinct: list = []
         seen: set = set()
         for e in group:
             if e.content and e.content not in seen:
                 seen.add(e.content)
                 distinct.append(e.content)
-        n = len(distinct)
-        if n < 2:
-            return
-        overlaps = []
-        for i in range(n):
-            for j in range(i + 1, n):
-                overlaps.append(_keyword_overlap(distinct[i], distinct[j], self.overlap_cache))
-        if not overlaps:
-            return
-        avg = sum(overlaps) / len(overlaps)
-        if avg < conflict_threshold:
-            anchor = next((a for a in self.anchors if a.id == anchor_id), None)
-            if any(c.anchor_a == anchor_id for c in self.conflicts):
+
+        # ── 回退路径：未注入 Projection Layer -> 旧关键词重叠行为（向后兼容）──
+        if self.canon_fn is None:
+            if len(distinct) < 2:
                 return
-            self.conflicts.append(Conflict(
-                anchor_a=anchor_id,
-                description=f"证据间平均一致度 {avg:.2f}（<{conflict_threshold}），存在潜在冲突/漂移，需人工确认",
-                severity=round(1.0 - avg, 2),
-            ))
+            overlaps = []
+            for i in range(len(distinct)):
+                for j in range(i + 1, len(distinct)):
+                    overlaps.append(_keyword_overlap(distinct[i], distinct[j], self.overlap_cache))
+            if not overlaps:
+                return
+            avg = sum(overlaps) / len(overlaps)
+            if avg < conflict_threshold:
+                anchor = next((a for a in self.anchors if a.id == anchor_id), None)
+                if any(c.anchor_a == anchor_id for c in self.conflicts):
+                    return
+                self.conflicts.append(Conflict(
+                    anchor_a=anchor_id,
+                    description=f"证据间平均一致度 {avg:.2f}（<{conflict_threshold}），存在潜在冲突/漂移，需人工确认",
+                    severity=round(1.0 - avg, 2),
+                ))
+                if anchor:
+                    anchor.conflict_penalty = max(0.1, anchor.conflict_penalty * 0.9)
+            return
+
+        # ── Layer-1 路径：复用同一可替换 Projection Layer ──
+        # 按 CP 分组 distinct content；同 CP 内若同时有 support 与 contradiction -> 真冲突
+        by_cp: dict = {}
+        rel_by_content: dict = {}
+        for e in group:
+            cp = self.canon_fn(e.content)
+            by_cp.setdefault(cp, []).append(e.content)
+            rel_by_content.setdefault(e.content, set()).add(e.relation or "support")
+        triggered = False
+        for cp, contents in by_cp.items():
+            if len(contents) < 2:
+                continue
+            distinct_rels = set()
+            for c in contents:
+                distinct_rels |= (rel_by_content.get(c) or {"support"})
+            if "support" in distinct_rels and "contradiction" in distinct_rels:
+                triggered = True
+                break
+        if triggered:
+            anchor = next((a for a in self.anchors if a.id == anchor_id), None)
+            if not any(c.anchor_a == anchor_id for c in self.conflicts):
+                self.conflicts.append(Conflict(
+                    anchor_a=anchor_id,
+                    description="Projection Layer 检测到同 CP 内存在 support 与 contradiction 异 relation 证据，判定为语义冲突",
+                    severity=conflict_threshold,
+                ))
             if anchor:
-                anchor.stability = max(0.1, anchor.stability * 0.9)
+                anchor.conflict_penalty = max(0.1, anchor.conflict_penalty * 0.9)
 
 
     def _recalc_anchor(self, anchor_id: str):
@@ -449,7 +492,7 @@ class WorkspaceState:
                 # base = 证据权重均值；stability = base + SEAL 自评层（seal_adjust 不被覆盖）
                 base = avg_weight
                 a.base_stability = base
-                a.stability = round(min(1.0, max(0.1, base + a.seal_adjust)), 3)
+                a.stability = round(min(1.0, max(0.1, base * a.conflict_penalty + a.seal_adjust)), 3)
                 evidence_count = len(group)
                 a.decay_value(evidence_count=evidence_count)
                 a.recalc_strength(evidence_count)
@@ -497,6 +540,7 @@ class WorkspaceState:
                                 s / (s + CONTRADICTION_WEIGHT * c + 1))), 3)
             if supports:
                 m.last_reinforced = max(e.timestamp for e in supports)
+                m.last_reinforced_iter = max(e.added_iter for e in supports)
 
     def step(self, dt: int = 1, decay_rate: float = 0.05):
         """显式时间动力学步（v0.8 液态循环核心）：
@@ -508,29 +552,29 @@ class WorkspaceState:
           若本轮有 support 证据 → 稳定性恢复到固有值（强化）；否则按时间衰减（无强化流失）
         - 重算锚点稳定性与审计更新时间
         """
+        prev_iter = self._iteration  # 上次 step 的迭代序号（τ 时间变量，非墙钟）
         # 1. 证据权重时间衰减
         for e in self.evidences:
             if not e.archived:
                 e.weight = max(e.weight * ((1 - decay_rate) ** dt), 0.05)
         # 2. 记忆稳定性：固有(计数驱动) + 时间衰减/强化
         for a in self.anchors:
-            self._update_memory_stability(a.id)
-        last_step = getattr(self, "_last_step_at", "")
-        now_dt = datetime.now(timezone.utc)
+            self._update_memory_stability(a.id)  # 内部以各 support 的 added_iter 最大值更新 last_reinforced_iter
         for m in self.memories:
             intrinsic = m.stability  # _update_memory_stability 已写入固有稳定性
-            # 强化 = 自上次 step 以来有过新 support 证据（last_reinforced 晚于上次 step）
-            reinforced = bool(m.last_reinforced) and (not last_step or m.last_reinforced > last_step)
+            # 强化 = 自上次 step（prev_iter）以来有新 support 证据抵达（last_reinforced_iter >= prev_iter）
+            # 以 τ=Effective Iteration 为时间变量，非墙钟，跨算力可比
+            reinforced = (m.last_reinforced_iter >= prev_iter)
             if reinforced:
                 m.stability = intrinsic  # 被强化：恢复到固有稳定性
             else:
                 # 无新强化：时间衰减，且不超过固有上限
                 m.stability = round(max(0.0, min(intrinsic,
                                     m.stability * ((1 - decay_rate) ** dt))), 3)
-        self._last_step_at = now()
         # 3. 重算锚点稳定性
         for a in self.anchors:
             self._recalc_anchor(a.id)
+        self._iteration += dt  # 推进有效状态更新计数（τ）
         self.updated_at = now()
 
 
