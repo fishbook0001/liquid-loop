@@ -577,6 +577,180 @@ class WorkspaceState:
         self._iteration += dt  # 推进有效状态更新计数（τ）
         self.updated_at = now()
 
+    # ─────────────────────────────────────────────────────────────
+    # v0.9.3 多智能体授权原语
+    # 修复共识误删事故：把归属校验从各接入层 wrapper 固化进核心，
+    # 使 REST / MCP / trae 桥 / 任意未来 agent 共用同一套授权，杜绝重复实现漂移。
+    # 注：本段不调用 save()，落盘由调用方在变更生效时负责（与 add_evidence 等一致）。
+    # ─────────────────────────────────────────────────────────────
+
+    def list_for(self, agent_id: str = "", category: Optional[str] = None) -> list[dict]:
+        """归属隔离列表：共识仅对贡献者可见，私有仅对贡献者可见，他人证据隔离。
+
+        - evidence：仅返回 agent_id 本人的（agent_id 为空 → 不返回任何证据，避免泄漏）。
+        - consensus 结晶：仅当 agent_id 是其 contributors 之一才返回（修复误删根因）。
+        - private 结晶：仅当 agent_id 在 contributors 才返回。
+        - 未知 scope 一律不暴露。
+        """
+        out: list[dict] = []
+        if agent_id:
+            for e in self.evidences:
+                if e.agent_id != agent_id:
+                    continue
+                cat = ""
+                anchor = next((a for a in self.anchors if a.id == e.anchor_id), None)
+                if anchor is not None:
+                    cat = anchor.name
+                out.append({
+                    "memory_id": e.id,
+                    "type": "evidence",
+                    "category": cat,
+                    "content": e.content,
+                    "agent_id": e.agent_id,
+                })
+        for m in self.memories:
+            if category and category != "(结晶)":
+                continue
+            if m.scope == "consensus":
+                if not agent_id or agent_id not in m.contributors:
+                    continue
+            elif m.scope == "private":
+                if not agent_id or agent_id not in m.contributors:
+                    continue
+            else:
+                continue
+            out.append({
+                "memory_id": m.id,
+                "type": "memory",
+                "category": "(结晶)",
+                "content": m.content,
+                "scope": m.scope,
+                "contributors": m.contributors,
+            })
+        return out
+
+    def delete_as(self, agent_id: str, memory_id: str) -> dict:
+        """带归属校验的删除（不自行落盘，由调用方 save）。
+
+        约束：
+        - 缺 agent_id → 拒绝。
+        - evidence：仅所有者可删。
+        - private 结晶：仅贡献者可删。
+        - consensus 结晶：禁止单端删除（需全体一致 dissolve），返回明确错误。
+        - content 兜底：仅删调用者贡献的 private + 本人 evidence；命中 consensus 整体拒绝。
+        """
+        if not agent_id:
+            return {"ok": False, "error": "forbidden: agent_id required to delete",
+                    "memory_id": memory_id}
+        ev = next((e for e in self.evidences if e.id == memory_id), None)
+        if ev is not None:
+            if ev.agent_id != agent_id:
+                return {"ok": False, "error": "forbidden: not owner of evidence",
+                        "memory_id": memory_id}
+            for a in self.anchors:
+                if ev.anchor_id == a.id and memory_id in a.evidence_ids:
+                    a.evidence_ids.remove(memory_id)
+            self.evidences.remove(ev)
+            return {"ok": True, "deleted": "evidence", "memory_id": memory_id}
+        mem = next((m for m in self.memories if m.id == memory_id), None)
+        if mem is not None:
+            if mem.scope == "consensus":
+                return {"ok": False,
+                        "error": "forbidden: consensus memory requires unanimous contributor dissolution, not single-agent delete",
+                        "memory_id": memory_id}
+            if agent_id not in mem.contributors:
+                return {"ok": False, "error": "forbidden: not a contributor of this private memory",
+                        "memory_id": memory_id}
+            self.memories.remove(mem)
+            return {"ok": True, "deleted": "memory", "memory_id": memory_id}
+        mems = [m for m in self.memories if m.content == memory_id]
+        if mems:
+            if any(m.scope == "consensus" for m in mems):
+                return {"ok": False,
+                        "error": "forbidden: content matches consensus memory; use unanimous dissolution",
+                        "memory_id": memory_id}
+            owned = [m for m in mems if agent_id in m.contributors]
+            if not owned:
+                return {"ok": False, "error": "forbidden: no owned private memory matches content",
+                        "memory_id": memory_id}
+            ev_ids = {eid for m in owned for eid in m.evidence_ids}
+            ev_ids |= {e.id for e in self.evidences if e.content == memory_id and e.agent_id == agent_id}
+            for m in owned:
+                self.memories.remove(m)
+            to_del = [e for e in self.evidences if e.id in ev_ids]
+            for e in to_del:
+                for a in self.anchors:
+                    if e.id in a.evidence_ids:
+                        a.evidence_ids.remove(e.id)
+                self.evidences.remove(e)
+            return {"ok": True, "deleted": "memory+evidence(owned only)", "memory_id": memory_id,
+                    "memories": len(owned), "evidences": len(to_del)}
+        return {"ok": False, "error": "not_found", "memory_id": memory_id}
+
+    def dissolve_as(self, agent_id: str, memory_id: str, votes_root: Path) -> dict:
+        """consensus 结晶的合法移除：全体贡献者各调用一次，集齐才真删。
+
+        - 缺 agent_id / 非 consensus / 非贡献者 → 拒绝。
+        - 每贡献者一票；投票持久化于 votes_root/.dissolve_votes.json。
+        - 集齐 → 真删（移除 memory + 其底层 evidence），清票，返回 dissolved=True。
+        - 未集齐 → 记票返回进度，不删。
+        不自行落盘 state（由调用方在 dissolved=True 时 save）。
+        """
+        if not agent_id:
+            return {"ok": False, "error": "forbidden: agent_id required to dissolve",
+                    "memory_id": memory_id}
+        mem = next((m for m in self.memories if m.id == memory_id), None)
+        if mem is None:
+            return {"ok": False, "error": "not_found", "memory_id": memory_id}
+        if mem.scope != "consensus":
+            return {"ok": False, "error": "not_consensus: use delete_as for private memory",
+                    "memory_id": memory_id}
+        if agent_id not in mem.contributors:
+            return {"ok": False, "error": "forbidden: not a contributor of this consensus",
+                    "memory_id": memory_id}
+        votes = _load_dissolve_votes(votes_root)
+        cast = set(votes.get(memory_id, []))
+        cast.add(agent_id)
+        need = set(mem.contributors)
+        if cast >= need:
+            ev_ids = set(mem.evidence_ids)
+            self.memories.remove(mem)
+            to_del = [e for e in self.evidences if e.id in ev_ids]
+            for e in to_del:
+                for a in self.anchors:
+                    if e.id in a.evidence_ids:
+                        a.evidence_ids.remove(e.id)
+                self.evidences.remove(e)
+            votes.pop(memory_id, None)
+            _save_dissolve_votes(votes_root, votes)
+            return {"ok": True, "dissolved": True, "memory_id": memory_id,
+                    "evidences": len(to_del), "voters": sorted(cast)}
+        votes[memory_id] = sorted(cast)
+        _save_dissolve_votes(votes_root, votes)
+        return {"ok": True, "dissolved": False, "memory_id": memory_id,
+                "voted": sorted(cast), "remaining": sorted(need - cast)}
+
+# ── dissolve 投票持久化（独立于核心 dataclass，守 North-Star 零改动）──
+def _dissolve_votes_path(root: Path) -> Path:
+    return Path(root) / ".dissolve_votes.json"
+
+
+def _load_dissolve_votes(root: Path) -> dict:
+    p = _dissolve_votes_path(root)
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _save_dissolve_votes(root: Path, votes: dict) -> None:
+    p = _dissolve_votes_path(root)
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(votes, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        pass
+
 
 # ==============================================================================
 # CPERegularizer — 能力保留正则化引擎（借鉴 UIUC CPE 论文 arXiv:2605.09315）

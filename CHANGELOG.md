@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.9.3 (2026-07-19) — 多智能体授权原语固化进核心（修复共识误删事故）
+
+> **事故复盘**：v0.9.2 及之前，归属校验（共识隔离 / 删除授权 / 一致解散）只在 `marvis_liquid_loop_server.py`
+> 这一层 wrapper 内实现，库核心 `WorkspaceState` 无任何授权原语。各接入层重复实现 → 漂移 →
+> 清测试数据时间样 `ll_list` 不过滤 `agent_id` 暴露他人共识、且 `ll_delete` 零校验，误删 5 条真实共识。
+> **本版把授权固化进库核心，成为单一事实源**，REST / MCP / trae 桥 / 任意未来 agent 共用同一套校验。
+
+- **新增 `WorkspaceState` 授权原语（liquid_loop/workspace.py）**：
+  - `list_for(agent_id, category)`：共识仅对贡献者可见、私有仅对贡献者可见、他人证据隔离；
+    **无身份（`agent_id` 为空）一律零返回**（比旧 server "管理视角"更严，守最小授权）。
+  - `delete_as(agent_id, memory_id)`：缺 `agent_id` 拒；evidence 仅 owner 删；private 仅 contributor 删；
+    consensus 禁单端删（须一致 dissolve）；content 兜底仅删本人相关、命中 consensus 整体拒。
+  - `dissolve_as(agent_id, memory_id, votes_root)`：consensus 合法移除，全体贡献者各投一票、集齐才真删；
+    投票持久化下沉至核心 `_load/_save_dissolve_votes`（独立 `.dissolve_votes.json`，不动 `Memory` dataclass，守 North-Star 零改动）。
+- **server 改为纯转发**：`ll_list/ll_delete/ll_dissolve` 委托上述核心方法，删除 server 内重复实现，消除漂移。
+- **测试**：新增 `tests/test_auth_guard.py` 16 断言（读隔离 / 删除授权 / 一致解散 / 跨实例投票持久化）；
+  全量回归 **58/58 PASS**，零污染。
+- **依赖**：无新依赖，禁向量纪律不变（一致性仍走字符级精确相等 + 审计链哈希）。
+
 ## v0.9.1 (2026-07-15) — 固态 A2A 通道：TRAE MCP 桥接 + 双 Agent 运维硬化（集成发布）
 
 > 本版**核心库零算法改动**（v0.9.0 已含冲突 O(g²)→O(d²)、时间动力学、双轨成核、审计链、禁向量）。
