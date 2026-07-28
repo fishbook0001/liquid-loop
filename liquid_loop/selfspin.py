@@ -43,6 +43,7 @@ import os
 import re
 import json
 import time
+import hashlib
 import argparse
 import urllib.request
 import urllib.error
@@ -170,13 +171,51 @@ class LiquidSelfSpin:
         self._raw: dict = {}          # report_id -> raw text（自述性溯源）
         self._clusters: list = []     # 聚类结果
         self._nuclei: list = []       # 本地核（≥2 篇支持的 canonical 簇）
+        # 液态重排持久化（v1.2.0）：激活态跨会话保持「活」
+        self.liquid_persist = True
+        self.liquid_cache_dir = os.path.expanduser("~/.liquidloop")
+        self._lr = None  # 持久化 LiquidReweight 实例（懒构造，复用跨 recall）
 
     # ── 本地快自转：摄入 ──
     def ingest(self, report_id: str, text: str, facts: list = None):
-        """摄入一篇报告。facts=None 时用 extractor 抽；也可直接传入 LLM 抽取结果。"""
+        """摄入一篇报告。facts=None 时用 extractor 抽；也可直接传入 LLM 抽取结果。
+
+        v1.2.0：摄入即激活——新事实沿拓扑唤醒其邻居并持久化（记忆「活」跨会话保留）。
+        持久化失败静默降级（观测增强非关键路径，极致稳态：主流程不受拖累）。
+        """
         self._raw[report_id] = text
         self._facts[report_id] = list(facts) if facts is not None else self.extractor(text)
+        if self.liquid_persist:
+            try:
+                lr = self._lr_instance()
+                lr.load_anchors(self._build_liquid_anchors())  # 拓扑随 facts 增长重建，保留激活
+                for f in self._facts[report_id]:
+                    lr.propagate(self._liquid_anchor_id(f), f, steps=1)
+                lr.save()
+            except Exception:
+                pass
         return len(self._facts[report_id])
+
+    # ── 液态重排持久化支持（v1.2.0）──
+    def _liquid_anchor_id(self, fact: str) -> str:
+        """内容哈希锚点 id（跨会话同事实同身份 → 激活态可恢复）。"""
+        return "h:" + hashlib.sha1(fact.encode("utf-8")).hexdigest()[:12]
+
+    def _build_liquid_anchors(self) -> list:
+        return [{"id": self._liquid_anchor_id(f), "name": f, "description": f}
+                for rid, fs in self._facts.items() for f in fs]
+
+    def _lr_instance(self):
+        """持久化 LiquidReweight：首次构造加载历史激活态（TTL 冷却），复用实例跨 recall。"""
+        if self._lr is None:
+            from .liquid_reweight import LiquidReweight
+            os.makedirs(self.liquid_cache_dir, exist_ok=True)
+            ns_h = hashlib.sha1(self.agent_ns.encode("utf-8")).hexdigest()[:10]
+            path = os.path.join(self.liquid_cache_dir, f"liquid_reweight_{ns_h}.json")
+            self._lr = LiquidReweight(persist_path=path, half_life=86400)
+            self._lr.load_anchors(self._build_liquid_anchors())
+            self._lr.load(path)  # 冷却恢复历史激活
+        return self._lr
 
     # ── 本地快自转：旋转（聚类 + 抽取 canonical）──
     def local_rotate(self) -> list:
@@ -280,22 +319,17 @@ class LiquidSelfSpin:
         if not liquid:
             return base
         # ── 液态召回增强（客户端，不碰 server；守禁向量）──
-        # 把本查询的字面命中当作「已注入证据」，激活其拓扑邻居，
-        # 让字面不直接匹配但拓扑相邻的弱相关事实被唤醒（补漏召）。
-        from .liquid_reweight import LiquidReweight
-        anchors = [{"id": f"{rid}::{i}", "name": f, "description": f}
-                   for rid, fs in self._facts.items() for i, f in enumerate(fs)]
-        lr = LiquidReweight()
-        lr.load_anchors(anchors)
+        # 用持久化 LiquidReweight：加载历史激活态（跨会话「活」）+ 本查询临时注入，
+        # 让字面不直接匹配但已激活/拓扑相邻的弱相关事实被唤醒（补漏召）。
+        lr = self._lr_instance()
+        lr.load_anchors(self._build_liquid_anchors())  # 拓扑最新，setdefault 保留已加载激活
         for hit in base:
-            for rid, fs in self._facts.items():
-                for i, f in enumerate(fs):
-                    if f == hit["fact"] and rid == hit["report_id"]:
-                        lr.propagate(f"{rid}::{i}", f, steps=1)
+            aid = self._liquid_anchor_id(hit["fact"])
+            lr.propagate(aid, hit["fact"], steps=1)
         liquid_scored = []
         for rid, fs in self._facts.items():
-            for i, f in enumerate(fs):
-                a_id = f"{rid}::{i}"
+            for f in fs:
+                a_id = self._liquid_anchor_id(f)
                 lit = _jaccard(query, f)
                 wake = lr.beta * lr.activation.get(a_id, 0.0)
                 sc = lit + wake
@@ -306,6 +340,7 @@ class LiquidSelfSpin:
                         "activation": round(lr.activation.get(a_id, 0.0), 3),
                     })
         liquid_scored.sort(key=lambda x: x["score"], reverse=True)
+        lr.save()  # 持久化本次查询激活（跨会话保留）
         return liquid_scored[:top_k]
 
     # ── 朴素直写基线（A/B 对照用）──

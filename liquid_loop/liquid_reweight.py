@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""液环 v1.1 · 液态重排引擎  Liquid Reweighting Layer
+"""液环 v1.2 · 液态重排引擎  Liquid Reweighting Layer（激活态持久化 · 跨会话保持「活」）
 ========================================================
 实质提升：把 LNN 的「液态」特征接入液环成核 / 双轨逻辑，
 让记忆本身能**流动重排**（非仅观测）。
@@ -43,6 +43,7 @@ import os
 import re
 import json
 import time
+import hashlib
 import argparse
 import urllib.request
 import urllib.error
@@ -74,6 +75,17 @@ def _containment(a: str, b: str) -> float:
     if not ta or not tb:
         return 0.0
     return len(ta & tb) / min(len(ta), len(tb))
+
+
+def _anchor_id_of(a: dict) -> str:
+    """内容寻址 anchor id：优先用显式 id，否则对 name+description 哈希（跨会话稳定）。
+
+    这让同一事实在跨会话/跨进程时共享同一激活身份 → 激活态持久化可恢复。
+    """
+    if a.get("id"):
+        return str(a["id"])
+    h = hashlib.sha1(f"{a.get('name', '')}|{a.get('description', '')}".encode("utf-8")).hexdigest()[:12]
+    return f"h:{h}"
 
 
 # 参考 LNN 实测 τ 窄带（lnn_cfc_demo 跑出 [0.656, 0.780]）
@@ -113,16 +125,20 @@ class LiquidReweight:
 
     def __init__(self, tau_min: float = TAU_MIN, tau_max: float = TAU_MAX,
                  beta: float = 0.6, topo_thresh: float = 0.20, amp_cap: float = AMP_CAP,
-                 min_activation: float = 0.2):
+                 min_activation: float = 0.2, persist_path: str = None,
+                 half_life: float = 86400):
         self.tau_min = tau_min
         self.tau_max = tau_max
         self.beta = beta
         self.topo_thresh = topo_thresh
         self.amp_cap = amp_cap
         self.min_activation = min_activation  # 精度护栏：激活低于此的弱边唤醒视为噪声滤除
-        self.activation: dict = {}        # anchor_id -> float（流动重排态）
+        self.persist_path = persist_path      # 激活态持久化文件路径（None=不落盘）
+        self.half_life = half_life            # 激活态半衰期(秒)，TTL 黏滞冷却：默认 1 天
+        self.activation: dict = {}        # anchor_id -> float（流动重排态，跨会话持久）
         self.topo: dict = {}              # anchor_id -> [(nbr_id, weight)]
         self._anchors: dict = {}          # anchor_id -> {id,name,description}
+        self.last_ts: int = int(time.time())
 
     # ── 文本视图：拓扑用 name（短·主题级），召回用 name+desc（含信息）──
     def _topo_text(self, a: dict) -> str:
@@ -133,10 +149,14 @@ class LiquidReweight:
 
     # ── 载入锚点（来自 8790 /list 或本地构造）──
     def load_anchors(self, anchors: list):
-        """anchors: list of dict {id, name, description}"""
-        self._anchors = {a["id"]: a for a in anchors}
-        for a in anchors:
-            self.activation.setdefault(a["id"], 0.0)
+        """anchors: list of dict {id?, name, description}。
+
+        anchor id 走内容寻址（_anchor_id_of）：显式 id 优先，否则哈希 →
+        跨会话同一事实共享同一激活身份，配套 save/load 可恢复激活态。
+        """
+        self._anchors = {_anchor_id_of(a): a for a in anchors}
+        for a_id in self._anchors:
+            self.activation.setdefault(a_id, 0.0)  # 保留已加载的持久激活（load 后调用）
         self._build_topology()
 
     def _build_topology(self):
@@ -246,6 +266,62 @@ class LiquidReweight:
             "topo_edges": sum(len(v) for v in self.topo.values()) // 2,
             "anchor_count": len(self._anchors),
         }
+
+    # ── 激活态持久化（跨会话保持「活」，守禁向量：全离散特征）──
+    def save(self, path: str = None) -> str:
+        """把激活态 + 参数写本地 JSON（不碰 server、不增 daemon）。
+
+        返回实际写入路径；persist_path 未设且无参数则跳过返回空串。
+        激活态按当前值原样落盘，冷却在 load() 时按时间重算（单一事实源=时间戳）。
+        """
+        path = path or self.persist_path
+        if not path:
+            return ""
+        self.last_ts = int(time.time())
+        data = {
+            "version": 2,
+            "mechanism": "liquid_reweight",
+            "ts": self.last_ts,
+            "tau_band": [self.tau_min, self.tau_max],
+            "beta": self.beta,
+            "topo_thresh": self.topo_thresh,
+            "min_activation": self.min_activation,
+            "half_life": self.half_life,
+            "activation": {k: round(v, 4) for k, v in self.activation.items()},
+        }
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        return path
+
+    def load(self, path: str = None) -> bool:
+        """从本地 JSON 恢复激活态，按 half_life 做 TTL 黏滞冷却。
+
+        冷却模型：cooled = raw * 0.5 ** (dt / half_life)，dt=now-ts。
+        隔夜(≈12h, half_life=1d)→≈0.71；3天→≈0.125（记忆淡忘但可重激活）。
+        返回是否成功加载；文件不存在/损坏返回 False。
+        注意：调用方应先 load_anchors() 建骨架，再 load() 覆盖激活（setdefault 不会丢）。
+        """
+        path = path or self.persist_path
+        if not path or not os.path.exists(path):
+            return False
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            return False
+        self.tau_min, self.tau_max = data.get("tau_band", [self.tau_min, self.tau_max])
+        self.beta = data.get("beta", self.beta)
+        self.topo_thresh = data.get("topo_thresh", self.topo_thresh)
+        self.min_activation = data.get("min_activation", self.min_activation)
+        self.half_life = data.get("half_life", self.half_life)
+        self.last_ts = data.get("ts", int(time.time()))
+        raw_act = data.get("activation", {})
+        now = int(time.time())
+        dt = max(0, now - self.last_ts)
+        decay = 0.5 ** (dt / max(1, self.half_life))
+        self.activation = {k: round(v * decay, 4) for k, v in raw_act.items()}
+        return True
 
     # ── 写回 8790（隔离 namespace，守禁向量）──
     def snapshot_to_8790(self, backend: str = DEFAULT_BACKEND,
