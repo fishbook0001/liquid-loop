@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""液环 v1.0 · 液态重排引擎  Liquid Reweighting Layer
+"""液环 v1.1 · 液态重排引擎  Liquid Reweighting Layer
 ========================================================
 实质提升：把 LNN 的「液态」特征接入液环成核 / 双轨逻辑，
 让记忆本身能**流动重排**（非仅观测）。
@@ -112,12 +112,14 @@ class LiquidReweight:
     """
 
     def __init__(self, tau_min: float = TAU_MIN, tau_max: float = TAU_MAX,
-                 beta: float = 0.6, topo_thresh: float = 0.20, amp_cap: float = AMP_CAP):
+                 beta: float = 0.6, topo_thresh: float = 0.20, amp_cap: float = AMP_CAP,
+                 min_activation: float = 0.2):
         self.tau_min = tau_min
         self.tau_max = tau_max
         self.beta = beta
         self.topo_thresh = topo_thresh
         self.amp_cap = amp_cap
+        self.min_activation = min_activation  # 精度护栏：激活低于此的弱边唤醒视为噪声滤除
         self.activation: dict = {}        # anchor_id -> float（流动重排态）
         self.topo: dict = {}              # anchor_id -> [(nbr_id, weight)]
         self._anchors: dict = {}          # anchor_id -> {id,name,description}
@@ -201,11 +203,15 @@ class LiquidReweight:
 
         对比纯字面召回（仅 _keyword_overlap），本方法把被激活唤醒的记忆
         加权拉入候选 → 弱相关但已「活」(激活)的记忆不再漏召。
+        精度护栏：字面无重叠且唤醒低于 min_activation 的锚点判为弱边噪声，滤除
+        （防止 topo_thresh 过低导致的过激活噪声，见 A/B 实证）。
         """
         scored = []
         for a_id, a in self._anchors.items():
             lit = _keyword_overlap(query, self._anchor_text(a))
             wake = self.beta * self.activation.get(a_id, 0.0)
+            if lit <= 0 and wake < self.min_activation:
+                continue  # 纯噪声弱边唤醒：滤除
             score = lit + wake
             if score > 0:
                 scored.append({

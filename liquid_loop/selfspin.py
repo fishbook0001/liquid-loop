@@ -271,12 +271,42 @@ class LiquidSelfSpin:
         return out
 
     # ── 自述性：本地回忆（不碰 8790）──
-    def recall_local(self, query: str, top_k: int = 5) -> list:
+    def recall_local(self, query: str, top_k: int = 5, liquid: bool = False) -> list:
         scored = [(_jaccard(query, f), rid, f)
                   for rid, fs in self._facts.items() for f in fs]
         scored.sort(key=lambda x: x[0], reverse=True)
-        return [{"report_id": rid, "fact": f, "score": round(s, 3)}
+        base = [{"report_id": rid, "fact": f, "score": round(s, 3)}
                 for s, rid, f in scored if s > 0][:top_k]
+        if not liquid:
+            return base
+        # ── 液态召回增强（客户端，不碰 server；守禁向量）──
+        # 把本查询的字面命中当作「已注入证据」，激活其拓扑邻居，
+        # 让字面不直接匹配但拓扑相邻的弱相关事实被唤醒（补漏召）。
+        from .liquid_reweight import LiquidReweight
+        anchors = [{"id": f"{rid}::{i}", "name": f, "description": f}
+                   for rid, fs in self._facts.items() for i, f in enumerate(fs)]
+        lr = LiquidReweight()
+        lr.load_anchors(anchors)
+        for hit in base:
+            for rid, fs in self._facts.items():
+                for i, f in enumerate(fs):
+                    if f == hit["fact"] and rid == hit["report_id"]:
+                        lr.propagate(f"{rid}::{i}", f, steps=1)
+        liquid_scored = []
+        for rid, fs in self._facts.items():
+            for i, f in enumerate(fs):
+                a_id = f"{rid}::{i}"
+                lit = _jaccard(query, f)
+                wake = lr.beta * lr.activation.get(a_id, 0.0)
+                sc = lit + wake
+                if sc > 0:
+                    liquid_scored.append({
+                        "report_id": rid, "fact": f, "score": round(sc, 3),
+                        "literal": round(lit, 3),
+                        "activation": round(lr.activation.get(a_id, 0.0), 3),
+                    })
+        liquid_scored.sort(key=lambda x: x["score"], reverse=True)
+        return liquid_scored[:top_k]
 
     # ── 朴素直写基线（A/B 对照用）──
     @staticmethod
