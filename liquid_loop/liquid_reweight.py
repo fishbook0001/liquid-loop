@@ -172,6 +172,26 @@ class LiquidReweight:
                     self.topo[ids[i]].append((ids[j], w))
                     self.topo[ids[j]].append((ids[i], w))
 
+    # ── 因果演化循环成核（v1.3）：显式因果边注入 ──
+    def add_causal_edges(self, edges: list):
+        """注入结构化因果边（守禁向量：确定性符号关系，非 embedding）。
+
+        edges = [(src_id, dst_id, weight), ...]，src/dst 为锚点 id。
+        因果边绕过 topo_thresh 噪声过滤直接并入拓扑 → propagate / liquid_recall
+        天然沿因果链唤醒邻接记忆，实现「因果邻近加成」：相关但字面不重叠的
+        记忆因因果链被召回（对照 #93 大脑「检索因果相关过往事件」机制）。
+        """
+        for src, dst, w in edges:
+            if src not in self._anchors or dst not in self._anchors or src == dst:
+                continue
+            wt = round(min(max(float(w), 0.0), 1.0), 3)
+            self.topo.setdefault(src, [])
+            self.topo.setdefault(dst, [])
+            if (dst, wt) not in self.topo[src]:
+                self.topo[src].append((dst, wt))
+            if (src, wt) not in self.topo[dst]:
+                self.topo[dst].append((src, wt))
+
     # ── ② 液态时间常数 τ(x) ──
     def tau_x(self, overlap: float) -> float:
         """重叠高→τ小→快吸收；重叠低→τ大→慢渗透。黏滞窄带封顶。"""
@@ -384,6 +404,21 @@ def _selftest(live: bool = False):
     # A 经激活排在 B 之前（记忆流动：激活态主导召回）
     assert liquid_ids[0] == "A", "自测失败：A 未因激活排首位"
     print(f"  ✓ 液态唤醒断言通过（A 经激活入榜且排首，记忆非死存储）")
+
+    # ── v1.3 因果演化循环成核：因果边独立于 keyword 拓扑唤醒远端记忆 ──
+    D = {"id": "D", "name": "量子白骨观", "description": "与液环无字面重叠的远端主题，仅靠因果边连接"}
+    lr.load_anchors(anchors + [D])  # 重建拓扑（含 D，D 与 A/B/C 无 keyword 连边）
+    lr.add_causal_edges([("A", "D", 0.6)])  # A→D 显式因果边，绕过 keyword 噪声过滤
+    lr.propagate("A", "液环禁止向量", steps=1)
+    print(f"\n  因果边 A→D(0.6)，D 激活={lr.activation['D']:.3f}（应>0，尽管字面零重叠）")
+    assert lr.activation["D"] > 0, "自测失败：因果边未唤醒远端 D"
+    # 因果召回：查询命中 D 主题但因因果边已激活，D 入榜
+    q2 = "量子白骨观是什么"
+    cr = lr.liquid_recall(q2, top_k=5)
+    cr_ids = [r["anchor_id"] for r in cr]
+    print(f"  因果查询[{q2}] 召回: {cr_ids}（D 应入榜）")
+    assert "D" in cr_ids, "自测失败：因果边未把远端 D 拉入召回"
+    print(f"  ✓ 因果演化循环成核断言通过（因果边唤醒+召回远端记忆）")
 
     # τ(x) 自适应方向校验
     t_hi = lr.tau_x(0.9)   # 高重叠 → 小 τ（快）

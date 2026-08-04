@@ -90,6 +90,8 @@ class Anchor:
     anchor_strength: float = 1.0
     seal_adjust: float = 0.0  # SEAL 自评层增量；_recalc 合成进 stability，不被覆盖（解 v0.6.3 假落地）
     conflict_penalty: float = 1.0  # 冲突惩罚累积乘子（Layer-1 修复：持久化，recalc/step/load 后保留）
+    # ── v1.3 因果演化循环成核：因果边（符号化，守禁向量）──
+    causal: dict = field(default_factory=dict)  # {causes,caused_by,enables,contradicts} -> list[node_id]
 
     def decay_value(self, factor: float = 0.95, evidence_count: int = 0) -> float:
         if not self.created_at:
@@ -160,6 +162,8 @@ class Evidence:
     relation: str = "support"  # 反证轨：evidence 与 memory 的关系 "support"(一致) | "contradiction"(冲突) | ""(legacy 视为 support)
     target_memory_id: str = ""  # relation=contradiction 时，可选显式指向被反驳的 memory（缺省=同锚点最近结晶）
     added_iter: int = 0  # 证据写入时的有效状态更新序号（τ=Effective Iteration）；强化门控据此判"自上次 step 以来是否有新 support 抵达"
+    # ── v1.3 因果演化循环成核：因果边（符号化，守禁向量）──
+    causal: dict = field(default_factory=dict)  # {causes,caused_by,enables,contradicts} -> list[node_id]
 
 
 @dataclass
@@ -177,6 +181,8 @@ class Memory:
     contradiction_count: int = 0  # 反驳该 memory 的证据数
     last_reinforced: str = ""  # 最近一次被 support 证据强化的时间戳（审计展示用）
     last_reinforced_iter: int = 0  # 最近一次被 support 强化的迭代序号（τ=Effective Iteration，非墙钟；强化门控以此为准）
+    # ── v1.3 因果演化循环成核：因果边（符号化，守禁向量）──
+    causal: dict = field(default_factory=dict)  # {caused_by,contradicts,...} -> list[node_id]；caused_by=成核血缘（证据id）
 
 
 @dataclass
@@ -350,12 +356,19 @@ class WorkspaceState:
                 if count >= 2 and (content, "private") not in crystallized_keys:
                     evidence_ids = [e.id for e in evs if e.content == content]
                     confidence = min(count / len(evs), 1.0)
+                    # v1.3 因果演化循环成核：血缘注册（caused_by=成核证据链；contradicts=反证指向）
+                    causal = {"caused_by": list(evidence_ids), "causes": [], "enables": [], "contradicts": []}
+                    contra = [e.target_memory_id for e in evs if e.content == content
+                              and e.relation == "contradiction" and e.target_memory_id]
+                    if contra:
+                        causal["contradicts"] = contra
                     self.memories.append(Memory(
                         content=content,
                         evidence_ids=evidence_ids,
                         confidence=confidence,
                         scope="private",
                         contributors=[owner],
+                        causal=causal,
                     ))
         # ── consensus 轨：跨 distinct owner 同 content >= 2 ──
         owners_by_content: dict = defaultdict(set)
@@ -376,12 +389,19 @@ class WorkspaceState:
             if (content, "consensus") not in crystallized_keys:
                 evidence_ids = [e.id for e in group if e.content == content and e.agent_id in owners]
                 confidence = min(len(owners) / 2.0, 1.0)
+                # v1.3 因果演化循环成核：血缘注册（caused_by=成核证据链；contradicts=反证指向）
+                causal = {"caused_by": list(evidence_ids), "causes": [], "enables": [], "contradicts": []}
+                contra = [e.target_memory_id for e in group if e.content == content
+                          and e.relation == "contradiction" and e.target_memory_id]
+                if contra:
+                    causal["contradicts"] = contra
                 self.memories.append(Memory(
                     content=content,
                     evidence_ids=evidence_ids,
                     confidence=confidence,
                     scope="consensus",
                     contributors=sorted(owners),
+                    causal=causal,
                 ))
         # 成核后触发自动描述回流（仅当描述为空）
         self._auto_describe_anchor(anchor_id)
