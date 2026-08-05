@@ -164,6 +164,8 @@ class Evidence:
     added_iter: int = 0  # 证据写入时的有效状态更新序号（τ=Effective Iteration）；强化门控据此判"自上次 step 以来是否有新 support 抵达"
     # ── v1.3 因果演化循环成核：因果边（符号化，守禁向量）──
     causal: dict = field(default_factory=dict)  # {causes,caused_by,enables,contradicts} -> list[node_id]
+    # ── v1.4 原理优先成核（MSM 反哺）：证据所例证的「原理/why」──
+    principle: str = ""  # 该证据例证的原理陈述（非空→参与原理优先成核；守禁向量=结构化文本非 embedding）
 
 
 @dataclass
@@ -183,6 +185,9 @@ class Memory:
     last_reinforced_iter: int = 0  # 最近一次被 support 强化的迭代序号（τ=Effective Iteration，非墙钟；强化门控以此为准）
     # ── v1.3 因果演化循环成核：因果边（符号化，守禁向量）──
     causal: dict = field(default_factory=dict)  # {caused_by,contradicts,...} -> list[node_id]；caused_by=成核血缘（证据id）
+    # ── v1.4 原理优先成核（MSM 反哺）──
+    principle: str = ""          # 该记忆例证的原理/why（非空=携带原理）
+    principle_grounded: bool = False  # True=由共享 principle 的证据结晶（why 先于 how 的首类核心）
 
 
 @dataclass
@@ -268,7 +273,7 @@ class WorkspaceState:
 
     def add_evidence(self, anchor, content: str, quality: float = 1.0, agent_id: str = "",
                      dedup: bool = False, relation: str = "support",
-                     target_memory_id: str = "") -> Optional[Evidence]:
+                     target_memory_id: str = "", principle: str = "") -> Optional[Evidence]:
         """向指定锚点添加一条证据。
 
         anchor 参数兼容：锚点名称(str) | 锚点ID(str) | Anchor对象
@@ -296,7 +301,7 @@ class WorkspaceState:
             id=uid(), anchor_id=target.id, content=content,
             quality=quality, timestamp=now(), agent_id=agent_id,
             relation=relation, target_memory_id=target_memory_id,
-            added_iter=self._iteration,
+            added_iter=self._iteration, principle=principle,
         )
         self.evidences.append(e)
         target.evidence_ids.append(e.id)
@@ -401,6 +406,43 @@ class WorkspaceState:
                     confidence=confidence,
                     scope="consensus",
                     contributors=sorted(owners),
+                    causal=causal,
+                ))
+        # ── v1.4 原理优先成核（MSM 反哺：先教 why 再教 how）──
+        # 共享 principle 的证据（即便 surface content 不同）结晶为「原理记忆」：
+        # 原理成为首类结晶核心，表层事实经 causal.caused_by 挂到原理之下。
+        # 对应 MSM 发现——先教原理(why)再教规则(how)使行为在分布漂移下仍稳健
+        # （Anthropic MSM：Qwen 失控率 54%→7% / 68%→5%）。principle_grounded 标记
+        # 供下游抗衰减加权（P2）。守禁向量：principle 为结构化文本，非 embedding。
+        prin_groups: dict = defaultdict(list)
+        for e in group:
+            if e.principle:
+                prin_groups[e.principle].append(e)
+        for prin, evs_p in prin_groups.items():
+            if len(evs_p) < 2:
+                continue
+            existing_p = next((m for m in self.memories
+                               if m.principle_grounded and m.content == prin), None)
+            if existing_p is not None:
+                merged = set(existing_p.evidence_ids) | {e.id for e in evs_p}
+                if merged != set(existing_p.evidence_ids):
+                    existing_p.evidence_ids = sorted(merged)
+                continue
+            if (prin, "private") not in crystallized_keys:
+                evidence_ids = [e.id for e in evs_p]
+                confidence = min(len(evs_p) / 2.0, 1.0)
+                # 原理记忆稳定性封顶为 1.0（principle_grounded 标记驱动下游抗衰减加权）
+                causal = {"caused_by": list(evidence_ids), "causes": [],
+                          "enables": [], "contradicts": []}
+                self.memories.append(Memory(
+                    content=prin,
+                    evidence_ids=evidence_ids,
+                    confidence=confidence,
+                    scope="private",
+                    contributors=sorted({e.agent_id for e in evs_p if e.agent_id}),
+                    principle=prin,
+                    principle_grounded=True,
+                    stability=1.0,
                     causal=causal,
                 ))
         # 成核后触发自动描述回流（仅当描述为空）
@@ -544,7 +586,9 @@ class WorkspaceState:
                            if any(eid in group_ids for eid in m.evidence_ids)]
         for m in anchor_memories:
             supports = [e for e in group
-                        if e.relation in ("support", "") and e.content == m.content]
+                        if e.relation in ("support", "")
+                        and (e.content == m.content
+                             or (m.principle_grounded and e.principle == m.content))]
             if m.id:
                 contradicts = [e for e in group
                                if e.relation == "contradiction"

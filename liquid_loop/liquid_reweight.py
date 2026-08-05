@@ -119,6 +119,7 @@ class LiquidReweight:
     Args:
       tau_min / tau_max : τ 窄带（黏滞约束），重叠=1→τ=tau_min(快)，重叠=0→τ=tau_max(慢)
       beta              : 液态召回的唤醒加成系数
+      principle_beta    : 原理(why)通道召回加成系数（MSM 反哺：原理匹配即便字面零重叠也召回）
       topo_thresh       : 拓扑连边的最低 containment（低于此不连，防噪声边）
       amp_cap           : 单次传播幅度封顶
     """
@@ -126,7 +127,7 @@ class LiquidReweight:
     def __init__(self, tau_min: float = TAU_MIN, tau_max: float = TAU_MAX,
                  beta: float = 0.6, topo_thresh: float = 0.20, amp_cap: float = AMP_CAP,
                  min_activation: float = 0.2, persist_path: str = None,
-                 half_life: float = 86400):
+                 half_life: float = 86400, principle_beta: float = 0.6):
         self.tau_min = tau_min
         self.tau_max = tau_max
         self.beta = beta
@@ -135,6 +136,7 @@ class LiquidReweight:
         self.min_activation = min_activation  # 精度护栏：激活低于此的弱边唤醒视为噪声滤除
         self.persist_path = persist_path      # 激活态持久化文件路径（None=不落盘）
         self.half_life = half_life            # 激活态半衰期(秒)，TTL 黏滞冷却：默认 1 天
+        self.principle_beta = principle_beta  # 原理(why)通道召回加成系数（MSM 反哺）
         self.activation: dict = {}        # anchor_id -> float（流动重排态，跨会话持久）
         self.topo: dict = {}              # anchor_id -> [(nbr_id, weight)]
         self._anchors: dict = {}          # anchor_id -> {id,name,description}
@@ -250,15 +252,17 @@ class LiquidReweight:
         for a_id, a in self._anchors.items():
             lit = _keyword_overlap(query, self._anchor_text(a))
             wake = self.beta * self.activation.get(a_id, 0.0)
-            if lit <= 0 and wake < self.min_activation:
+            prin = _keyword_overlap(query, a.get("principle", ""))
+            if lit <= 0 and prin <= 0 and wake < self.min_activation:
                 continue  # 纯噪声弱边唤醒：滤除
-            score = lit + wake
+            score = lit + wake + self.principle_beta * prin
             if score > 0:
                 scored.append({
                     "anchor_id": a_id,
                     "name": a.get("name"),
                     "score": round(score, 4),
                     "literal": round(lit, 4),
+                    "principle": round(prin, 4),
                     "activation": round(self.activation.get(a_id, 0.0), 3),
                 })
         scored.sort(key=lambda x: x["score"], reverse=True)
@@ -419,6 +423,23 @@ def _selftest(live: bool = False):
     print(f"  因果查询[{q2}] 召回: {cr_ids}（D 应入榜）")
     assert "D" in cr_ids, "自测失败：因果边未把远端 D 拉入召回"
     print(f"  ✓ 因果演化循环成核断言通过（因果边唤醒+召回远端记忆）")
+
+    # ── v1.4 原理优先成核（MSM 反哺）：原理匹配(why)即便字面零重叠也召回 ──
+    # E 表面内容与液环无关，但 principle 声明「一致性判定守禁向量」，
+    # 查询只命中 principle 关键词 → E 经 principle 通道入榜（generalization）。
+    E = {"id": "E", "name": "某远端无关主题", "description": "表面与液环无字面重叠",
+         "principle": "一致性判定守禁向量，不依赖 embedding"}
+    lr.load_anchors(anchors + [D] + [E])  # 重建拓扑（D 因果边须重加）
+    lr.add_causal_edges([("A", "D", 0.6)])  # 因果边不被 load_anchors 保留，重加
+    q3 = "一致性判定守禁向量"  # 仅命中 E.principle，字面不重叠 E 的 name/desc
+    pr = lr.liquid_recall(q3, top_k=5)
+    pr_ids = [r["anchor_id"] for r in pr]
+    print(f"\n  原理查询[{q3}] 召回: {pr_ids}（E 应入榜，且 literal=0）")
+    e_row = next((r for r in pr if r["anchor_id"] == "E"), None)
+    assert e_row is not None, "自测失败：原理匹配未召回 E"
+    assert e_row["literal"] == 0.0, "自测失败：E 竟有字面重叠（应为纯原理通道）"
+    assert e_row["principle"] > 0, "自测失败：E 的 principle 通道未计分"
+    print(f"  ✓ 原理优先成核断言通过（why 通道唤醒字面零重叠的 E）")
 
     # τ(x) 自适应方向校验
     t_hi = lr.tau_x(0.9)   # 高重叠 → 小 τ（快）
