@@ -544,8 +544,9 @@ class WorkspaceState:
                 anchor.conflict_penalty = max(0.1, anchor.conflict_penalty * 0.9)
 
 
-    def _recalc_anchor(self, anchor_id: str):
-        group = [e for e in self.evidences if e.anchor_id == anchor_id]
+    def _recalc_anchor(self, anchor_id: str, group: Optional[list] = None):
+        if group is None:
+            group = [e for e in self.evidences if e.anchor_id == anchor_id]
         if not group:
             return
         avg_weight = sum(e.weight for e in group) / len(group)
@@ -571,16 +572,21 @@ class WorkspaceState:
     # v0.8 反证轨 + 时间动力学（液态循环核心）
     # ─────────────────────────────────────────────────────────────
 
-    def _update_memory_stability(self, anchor_id: str):
+    def _update_memory_stability(self, anchor_id: str, group: Optional[list] = None):
         """反证轨：一致证据(support)增稳，冲突证据(contradiction)降稳。
 
         稳定性 = support / (support + CONTRADICTION_WEIGHT * contradiction + 1)
         - 同锚点下 content 相同的 support 证据计为支持
         - relation="contradiction" 的证据计为反驳（显式 target_memory_id 或同锚点无指定则作用于该锚点结晶）
         - 有 support 证据则刷新 last_reinforced（时间动力学强化信号）
+
+        group: 可选预过滤的该锚点证据列表（step 预分桶传入，避免每个锚点重复全量扫描
+               evidences；缺省时内部构建，保持单锚点调用方行为不变）。
         """
         CONTRADICTION_WEIGHT = 2.0
-        group = [e for e in self.evidences if e.anchor_id == anchor_id and not e.archived]
+        if group is None:
+            group = [e for e in self.evidences if e.anchor_id == anchor_id]
+        group = [e for e in group if not e.archived]  # 统一过滤：无论传入/构建均排除归档证据
         group_ids = {e.id for e in group}
         anchor_memories = [m for m in self.memories
                            if any(eid in group_ids for eid in m.evidence_ids)]
@@ -621,9 +627,15 @@ class WorkspaceState:
         for e in self.evidences:
             if not e.archived:
                 e.weight = max(e.weight * ((1 - decay_rate) ** dt), 0.05)
+        # 预分桶（全量，O(E)）：供下方两方法复用，消除原实现各自对每个锚点全量扫描
+        # evidences 的 O(A·E) 开销。_update_memory_stability 内部会过滤归档证据，
+        # _recalc_anchor 保留全量（与原语义一致）。
+        ev_by_anchor: dict = defaultdict(list)
+        for e in self.evidences:
+            ev_by_anchor[e.anchor_id].append(e)
         # 2. 记忆稳定性：固有(计数驱动) + 时间衰减/强化
         for a in self.anchors:
-            self._update_memory_stability(a.id)  # 内部以各 support 的 added_iter 最大值更新 last_reinforced_iter
+            self._update_memory_stability(a.id, group=ev_by_anchor.get(a.id, []))
         for m in self.memories:
             intrinsic = m.stability  # _update_memory_stability 已写入固有稳定性
             # 强化 = 自上次 step（prev_iter）以来有新 support 证据抵达（last_reinforced_iter >= prev_iter）
@@ -637,7 +649,7 @@ class WorkspaceState:
                                     m.stability * ((1 - decay_rate) ** dt))), 3)
         # 3. 重算锚点稳定性
         for a in self.anchors:
-            self._recalc_anchor(a.id)
+            self._recalc_anchor(a.id, group=ev_by_anchor.get(a.id, []))
         self._iteration += dt  # 推进有效状态更新计数（τ）
         self.updated_at = now()
 
@@ -817,6 +829,11 @@ def _save_dissolve_votes(root: Path, votes: dict) -> None:
 
 
 # ==============================================================================
+# ─────────────────────────────────────────────────────────────
+# 研究脚手架区（research-only · 不在 8790 生产路径）
+# 以下 CPERegularizer / SelfRefineEngine / meta_thinker 仅供 CLI 的
+# audit / evolution 子命令与单测使用；8790 server 不加载，不影响稳态。
+# ─────────────────────────────────────────────────────────────
 # CPERegularizer — 能力保留正则化引擎（借鉴 UIUC CPE 论文 arXiv:2605.09315）
 #
 # CPE 核心思想（§3）：自进化更新应在获取新能力的同时，最小化对已有能力结构的破坏性干扰。
