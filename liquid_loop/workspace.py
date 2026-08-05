@@ -9,7 +9,7 @@ import hashlib
 import json
 import os
 import re
-from collections import Counter
+from collections import Counter, defaultdict
 
 from .cognitive_budget import CognitiveBudgetStabilizer
 
@@ -343,14 +343,14 @@ class WorkspaceState:
         if len(group) < 2:
             return
         # 已结晶键集合（复合键判定，杜绝跨锚点/跨轨污染）
-        crystallized_keys: set = set()
-        for m in self.memories:
-            for eid in m.evidence_ids:
-                ev = next((e for e in self.evidences if e.id == eid), None)
-                if ev is not None and ev.anchor_id == anchor_id:
-                    crystallized_keys.add((m.content, m.scope))
-                    break
-        from collections import defaultdict
+        # 优化：用本锚点证据 id 集合直接判定 memory 是否引用本锚点，
+        # 避免对每条 evidence_id 做 next() 线性扫描（原 O(M·E_m·E) → O(M·E_m)）
+        group_ev_ids = {e.id for e in group}
+        crystallized_keys: set = {
+            (m.content, m.scope)
+            for m in self.memories
+            if group_ev_ids.intersection(m.evidence_ids)
+        }
         # ── private 轨：按 agent_id 分组，组内同 content >= 2 ──
         by_agent: dict = defaultdict(list)
         for e in group:
@@ -1401,58 +1401,3 @@ def meta_thinker_advice(anchor: Anchor, state: WorkspaceState, new_evidence: str
 
 
 # ==============================================================================
-# 节律采样检索（Rhythmic Sampling Retrieve）
-# 启发来源：Biba et al. 2026, Nature Human Behaviour — 7Hz theta 脉冲记忆编码
-# 思路：记忆检索不是"取 top-N"，而是分窗口脉冲采样，每组取最优，跨组去重
-# ==============================================================================
-
-def rhythmic_retrieve(
-    state: WorkspaceState,
-    query: str,
-    window_size: int = 7,
-    top_per_window: int = 1,
-    total_slots: int = 5,
-) -> list[str]:
-    """节律采样检索：分窗口脉冲采样，每组取最优，跨组去重。
-
-    - window_size: 每个"脉冲窗口"的候选数量（默认 7，呼应 7Hz theta 节律）
-    - top_per_window: 每个窗口保留的条数
-    - total_slots: 最终返回的总条数
-
-    比直接 top-N 的优势：避免同质记忆堆叠，增加多样性
-    """
-    if not query:
-        return []
-
-    # 候选集：证据 + 锚点描述
-    candidates: list[str] = []
-    for e in state.evidences:
-        if e.content:
-            candidates.append(e.content)
-    for a in state.anchors:
-        if a.description:
-            candidates.append(a.description)
-        if a.name:
-            candidates.append(a.name)
-
-    if not candidates:
-        return []
-
-    # 计算 overlap 并排序
-    scored = [(_keyword_overlap(query, c, state.overlap_cache), c) for c in candidates]
-    scored.sort(key=lambda x: x[0], reverse=True)
-
-    # 节律窗口采样：每 window_size 个为一组脉冲，每组取 top_per_window
-    result = []
-    seen = set()
-    for i in range(0, len(scored), window_size):
-        window = scored[i : i + window_size]
-        # 每组内按 overlap 降序取 top_per_window
-        for _, content in window[:top_per_window]:
-            if content not in seen and len(result) < total_slots:
-                seen.add(content)
-                result.append(content)
-        if len(result) >= total_slots:
-            break
-
-    return result[:total_slots]
