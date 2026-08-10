@@ -11,6 +11,35 @@
 
 ---
 
+## 30 秒理解：为什么禁向量？
+
+> **向量检索没有「成核门槛」**——单独一条陈述就能进入检索池，并因为"最新"而胜出。
+> 所以一条噪声 / 幻觉 / 误录入就能改写系统的记忆。
+> 液环要求 **≥2 条一致证据才结晶**，单条噪声无法形成记忆。
+
+这句话是可证伪的，有对照实验（同输入流、同种子、baseline 刻意做强）：
+
+| 系统 | 事实更新类场景 (S1/S2/S3/S5) | **S4 单条噪声注入** | 可解释 |
+|------|------------------------|------------------|-------|
+| naive vector | 12/36 错 | 3/6 错 | ✗ |
+| vector + recency | 3/36 错 | 5/6 错 | ✗ |
+| **vector + recency + slot 过滤**（最强 baseline） | **0/36 错** | **5/6 错** | ✗ |
+| **Liquid Loop** | **0/36 错** | **0/6 错** | ✓ 可回溯到 evidence id |
+
+**注意第三行**：最强 baseline 在常规事实更新上已完全追平液环——
+**如果你的场景只是"事实会更新"，用向量 + recency + 过滤就够了，不需要液环。**
+分野只在**输入源不可信**时出现：向量方案无法区分"真实更新"和"一条噪声"，液环可以。
+
+```bash
+python3 liquid_core.py                                    # 215 行零依赖内核，看清全部机制
+python3 examples/experiments/vector_vs_liquid_drift.py    # 复现上表所有数字
+```
+
+两个脚本纯标准库，无需 `pip install`，Python 3.9+ 直接跑。
+完整论证与液环的**成本和适用边界** → **[WHY_NO_VECTOR.md](WHY_NO_VECTOR.md)**
+
+---
+
 ## 核心理念
 
 **当前所有 Agent 记忆系统的共同缺陷：依赖外部编辑。**
@@ -35,7 +64,7 @@
 | **Anchor** 锚点 | 晶种 | 认知关注点，有稳定性值 s ∈ [0,1] |
 | **Evidence** 证据 | 附着粒子 | 锚点下的具体观察，权重指数衰减 w×0.95ᵗ |
 | **Memory** 结晶 | 结晶体 | 2+ 条一致 Evidence 自动凝聚，有置信度 c |
-| **Entropy** 熵值 (LEI) | 流体无序度 | 八维加权（锚点漂移 / 冲突密度 / 碎片 / 活跃间隔 / 价值衰减 / 锚定强度 / CPE 三维） |
+| **Entropy** 熵值 (LEI) | 流体无序度 | 九维加权（锚点漂移 / 冲突密度 / 碎片 / 活跃间隔 / 价值衰减 / 锚定强度 / CPE 三维） |
 
 **状态判定：**
 ```
@@ -95,12 +124,22 @@ state.step(dt=10, decay_rate=0.05)
 | 实验 | 问题 | 结论 |
 |------|------|------|
 | **E2 错误记忆恢复** | 能否主动遗忘错误并恢复？ | 80%错误+20%真实 → 反证轨使错误 stability 0.67→0.30、正确升至 0.69 主导 ✅ |
-| **E3 多 Agent 冲突** | mesh v2 能否形成稳定共享认知？ | A support / B contradiction / C noise → 核心 claim 进入受争议稳定区(0.40)，噪声隔离 ✅ |
+| **E3 多 Agent 冲突** | 多 Agent 冲突能否形成稳定共享认知？（MESH 集成已移除） | A support / B contradiction / C noise → 核心 claim 进入受争议稳定区(0.40)，噪声隔离 ✅ |
 | **E1 长期漂移** | 1000 轮随机注入是否收敛？ | 300 轮压测 → 48 记忆(≤池×3)、plateau、LEI GREEN、avg_stab 0.80 ✅ |
+| **E4 向量对照** | 与向量方案同台，液环赢在哪？ | 最强 baseline(向量+recency+slot) 在常规更新已追平(0/36)；**唯 S4 单条噪声注入失守 5/6，液环 0/6** ✅ |
 
 ```bash
-python3 examples/experiments/run_all.py   # 生成 REPORT_v0.8.json
+python3 examples/experiments/run_all.py                   # E1/E2/E3 → REPORT_v0.8.json
+python3 examples/experiments/vector_vs_liquid_drift.py    # E4 向量对照（零依赖，独立可跑）
 ```
+
+> **真实管线版 E4（推荐先看这个）**：`examples/faithful/faithful_e4.py` 用**真实**
+> `selfspin.LiquidSelfSpin` + **真实** `workspace.WorkspaceState`（非裸内核），验证
+> "改写 + 噪声输入下的端到端行为"，并演示 selfspin「字符重叠聚类」的盲区边界
+> （词汇不重叠的同义 → 无法成核 → 事实流失）。stdlib-only、零依赖，**直接用任意 python3 跑（无需 venv）**：
+> ```bash
+> python3 examples/faithful/faithful_e4.py
+> ```
 
 ---
 
@@ -168,47 +207,9 @@ liquid-loop snapshot
 
 ---
 
-## MESH 集成（多智能体共识）
+## MESH 集成与 A2A 桥接（已移除）
 
-液环从 v0.7.0 起内置官方 MESH 集成 `liquid_loop.mesh`，把"多智能体共识协议"落地为可复用代码，作为 agent-mesh 节点的标准接入层。
-
-```python
-from liquid_loop.mesh import validate_evidence, compute_cci, cognitive_health, fetch_state
-
-# agent 写入前契约自检（零向量：content 必须精确字符串，禁 embedding）
-ok, errs = validate_evidence({"agent_id": "vera", "content": "用户偏好简洁输出"})
-
-# 从 8790 拉取记忆状态，算主体间性共识指数 CCI
-items = fetch_state("http://127.0.0.1:8790")
-health = cognitive_health(items)
-print(health["CCI"], health["consensus_crystals"])
-```
-
-零向量哲学：一致性判定走**结构化精确相等 + 审计链哈希**，绝不引入任何 embedding / 相似度。规范详见 `mesh/liquid_loop_mesh_v2_spec.md`。
-
----
-
-## 固态 A2A 通道（任意 MCP 客户端接入）
-
-把共享液环后端（地址由环境变量 `LIQUID_LOOP_BASE` 决定，默认 `http://127.0.0.1:8790`）封装成一个
-**stdio JSON-RPC 的 MCP server**，让任意支持 Model Context Protocol 的客户端（本例以 TRAE SOLO CN 演示）
-**原生读写同一份共享记忆**——这就是多 agent 间的固化（solidified）A2A 通道。
-
-> 后端说明：桥接只做协议翻译，**不内置 8790 服务**；后端由你自己部署（运行你自己的液环 SSE 服务，
-> 把地址通过 `LIQUID_LOOP_BASE` 传给桥接）。成核 / 共识 / 审计链全部由后端按液环理论执行。
-
-```bash
-# 在你的 MCP 客户端注册该 server（以 TRAE 为例；其 code CLI 路径随安装而异，请替换为你的路径）
-export PY=python3                                    # 任意 Python 3.10+ 解释器
-export SVR=examples/trae_mesh_mcp/mcp_server.py      # 本仓库内路径
-export LIQUID_LOOP_BASE=http://127.0.0.1:8790        # 改成你的后端地址
-"<path-to-your-trae-code-cli>" \
-  --add-mcp '{"servers":{"liquidloop-mesh":{"command":"'"$PY"'","args":["'"$SVR"'"]}}}'
-```
-
-桥接暴露 `liquidloop_remember` / `liquidloop_recall` / `liquidloop_metrics` 三个工具（写入**必须声明 `agent_id`**）。
-压测脚本与运维说明见 [`examples/trae_mesh_mcp/README.md`](examples/trae_mesh_mcp/README.md)
-（直连 + 经桥双路并发，零丢写 / 共识幂等 / 崩溃恢复三关全 PASS；所有路径走环境变量，适配不同部署拓扑）。
+> ⚠️ `liquid_loop.mesh`（多智能体共识协议）与 `examples/trae_mesh_mcp`（stdio MCP 桥接 demo）已于 v0.7.x 后从发行包移除（commit `ac7260e`，过度工程化过滤）。相关 API（`validate_evidence` / `compute_cci` / `cognitive_health` / `fetch_state`）与桥接代码当前不在仓库中；"多 Agent 共享认知"仍属理论目标，未随包发布。
 
 ---
 
@@ -229,7 +230,7 @@ export LIQUID_LOOP_BASE=http://127.0.0.1:8790        # 改成你的后端地址
         ↓
    Memory State  ←──────────────┐
         ↓                        │
-   LEI Evaluation (八维熵)        │
+   LEI Evaluation (九维熵)        │
         ↓                        │
    Decay / Reinforcement ────────┘
         ↓
@@ -282,21 +283,31 @@ Liquid Loop 是唯一完全自组织 + 零 LLM 管理的系统。
 
 ```
 liquid-loop/
+├── liquid_core.py       # ★ 215 行零依赖最小内核（单文件可跑，读它就懂全部机制）
+├── WHY_NO_VECTOR.md     # ★ 禁向量的完整论证 + 对照实验数据 + 适用边界
 ├── liquid_loop/
 │   ├── __init__.py      # 公共 API 导出
 │   ├── workspace.py     # 核心数据模型 + AuditChain + auto_classify + decay
 │   ├── storage.py       # JSON 持久化 + 审计链写入
-│   ├── entropy.py       # 八维熵值计算（含 CPE 三维）
-│   ├── mesh/            # MESH v2 多智能体共识协议集成（validate_evidence / compute_cci / ...）
+│   ├── entropy.py       # 九维熵值计算（6 基础 + CPE 三维）
 │   └── cli.py           # Click CLI (11 命令)
 ├── examples/
-│   └── quickstart.py
-├── tests/               # 待补充
+│   ├── quickstart.py
+│   ├── experiments/
+│   │   ├── e1_drift.py / e2_recovery.py / e3_conflict.py   # 液环自证实验
+│   │   └── vector_vs_liquid_drift.py                        # ★ E4 向量对照（零依赖·核心机制 demo）
+│   └── faithful/
+│       └── faithful_e4.py   # ★ 真实管线 E4（selfspin→WorkspaceState，零依赖 无污染）
+├── tests/
 ├── pyproject.toml
 ├── README.md
 ├── LICENSE
 └── CHANGELOG.md
 ```
+
+> **`liquid_core.py` 与完整版行为一致性已验证**：结晶 / 反证 / 共识轨 / step 衰减
+> 四场景 stability 数值完全相同（4/4 PASS）。内核是可信的教学与审计入口，
+> 不是简化到失真的玩具。
 
 ---
 
@@ -313,7 +324,7 @@ pytest -v
 
 ## 路线图
 
-- [x] 多 Agent 液环耦合（`liquid_loop.mesh` v2 共识协议，2026-07-15 落地）
+- [ ] 多 Agent 液环耦合（`liquid_loop.mesh` 已移除，见 commit ac7260e）
 - [x] **[v0.8] 反证轨（Evidence Graph）**：Evidence 分 support / contradiction，一致增稳、冲突降稳，驱动 memory stability score（不再"一致即真"）
 - [x] **[v0.8] 显式时间动力学**：`M(t+1) = M(t) + reinforcement − decay − contradiction_penalty`，让记忆成为"过程"而非"对象"（真正的液态循环）
 - [x] **[v0.8] 三实验全 PASS**：E2 错误记忆恢复 → E3 多 agent 冲突 → E1 长期漂移（见上节）

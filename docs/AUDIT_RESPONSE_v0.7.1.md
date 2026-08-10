@@ -12,7 +12,7 @@
 
 | 评审描述 | 当前代码实况 |
 |---|---|
-| `calculate_entropy(state)` 五维加权 | 函数已改名 `calculate()`，**八维加权**（含 CPE 三维） |
+| `calculate_entropy(state)` 五维加权 | 函数已改名 `calculate()`，**九维加权**（6 基础 + CPE 三维） |
 | "完全缺时间动力学" | **已有衰减基建**：`Anchor.decay_value(factor=0.95)`、`activity_gap`、`value_score` 衰减；缺的是**显式 dM/dt 过程封装** |
 | Evidence → Memory 一致即真 | 确为 2+ 一致成核，且有 `conflict_density` 计数；但**冲突未参与稳定性调节**（无反证轨） |
 

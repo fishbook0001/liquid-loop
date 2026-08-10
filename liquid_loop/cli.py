@@ -87,7 +87,7 @@ def init():
 
 @main.command()
 def status():
-    """显示当前认知状态（CPE八维熵值）"""
+    """显示当前认知状态（CPE九维熵值）"""
     s = _load()
     ent = calculate(s)
     level = "GREEN" if ent < 0.3 else ("YELLOW" if ent < 0.6 else "RED")
@@ -96,7 +96,7 @@ def status():
     click.echo(f"熵值: {ent:.4f} [{level}] | 最新活动: {latest_ev}")
     click.echo(f"CPE干预: {s.cpe_regularization_count}次 | 版本: {s.version}")
 
-    # 八维熵值快速
+    # 九维熵值快速
     det = calculate_detail(s)
     click.echo(f"  [原五维] 漂移{det['anchor_drift']:.2f} 冲突{det['conflict_density']:.2f} 碎片{det['evidence_fragmentation']:.2f} 活动{det['activity_gap']:.2f} 价值{det['value_decay']:.2f}")
     click.echo(f"  [CPE三维] 回顾{det['cpe_retrospective_decay']:.2f} 漂移{det['cpe_behavioral_drift']:.2f} 泛化{det['cpe_generalization_erosion']:.2f}")
@@ -235,7 +235,7 @@ def relation_list():
 
 @main.command()
 def check():
-    """检查工作区熵值（八维）"""
+    """检查工作区熵值（九维）"""
     s = _load()
     det = calculate_detail(s)
     ent = det["combined"]
@@ -501,10 +501,10 @@ def cpe_status():
     else:
         click.echo(f"  活跃侵蚀告警: 无")
 
-    # 八维熵值详情
+    # 九维熵值详情
     from .entropy import calculate_detail
     det = calculate_detail(s)
-    click.echo(f"\n━━━ 八维熵值详情 ━━━")
+    click.echo(f"\n━━━ 九维熵值详情 ━━━")
     click.echo(f"  综合熵: {det['combined']:.4f}")
     click.echo(f"  ── 基础五维 ──")
     click.echo(f"    锚点漂移:           {det['anchor_drift']:.4f}")
@@ -519,57 +519,13 @@ def cpe_status():
     click.echo(f"    泛化崩塌(CPE):      {det['cpe_generalization_erosion']:.4f}")
 
 
+@main.command()
+def version():
+    """显示当前版本号"""
+    from . import __version__
+    click.echo(f"liquid-loop {__version__}")
+
+
 if __name__ == "__main__":
     main()
 
-@cli.command()
-@click.argument("content")
-@click.option("--evidence-ids", help="证据ID列表，逗号分隔")
-def memory_add(content: str, evidence_ids: str):
-    """添加一条记忆结晶"""
-    state = load_state()
-    eids = [eid.strip() for eid in evidence_ids.split(",")] if evidence_ids else None
-    state.add_memory(content, eids)
-    save_state(state)
-    click.echo(f"Memory added: {content[:50]}...")
-
-@cli.command()
-def memory_list():
-    """列出所有记忆结晶"""
-    state = load_state()
-    if not state.memories:
-        click.echo("No memories yet")
-        return
-    for m in state.memories:
-        click.echo(f"  {m.id[:8]} | conf={m.confidence:.2f} | {m.content[:60]}...")
-
-@cli.command()
-@click.argument("anchor_id")
-def conflict_resolve(anchor_id: str):
-    """标记冲突为已解决（移除该锚点的冲突记录）"""
-    state = load_state()
-    before = len(state.conflicts)
-    state.conflicts = [c for c in state.conflicts if c.anchor_a != anchor_id]
-    after = len(state.conflicts)
-    save_state(state)
-    click.echo(f"Resolved {before - after} conflict(s) for anchor {anchor_id}")
-
-@cli.command()
-@click.argument("anchor_id")
-@click.argument("description")
-def anchor_describe(anchor_id: str, description: str):
-    """手动设置锚点描述"""
-    state = load_state()
-    anchor = next((a for a in state.anchors if a.id == anchor_id or a.name == anchor_id), None)
-    if not anchor:
-        click.echo(f"Anchor not found: {anchor_id}")
-        return
-    anchor.description = description
-    save_state(state)
-    click.echo(f"Anchor '{anchor.name}' description updated")
-
-@cli.command()
-def version():
-    """显示版本号"""
-    from . import __version__
-    click.echo(f"liquid-loop {__version__}")

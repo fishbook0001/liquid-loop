@@ -1,5 +1,5 @@
-"""Liquid Loop — Workspace Cognitive Runtime v1.1.0 (v1.0.0 + 液态重排引擎 Liquid Reweight: τ(x)黏滞唤醒 + 液态召回, 实证 97% 精度)"""
-__version__ = "1.4.0"
+"""Liquid Loop — Workspace Cognitive Runtime v1.8.0 (禁向量·活态液态神经网络：成核门槛/反证轨/老化回收/原理优先成核/因果演化)"""
+__version__ = "1.8.0"
 
 from .workspace import (
     WorkspaceState, Anchor, Evidence, Memory, Conflict,

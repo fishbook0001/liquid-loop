@@ -52,7 +52,7 @@ def activity_gap(state: WorkspaceState) -> float:
     return min(gap / timedelta(days=7), 1.0)
 
 
-# 熵值分量（综合见 calculate，八维加权含 CPE 三维）
+# 熵值分量（综合见 calculate，九维加权含 CPE 三维）
 
 def value_decay_entropy(state: WorkspaceState) -> float:
     """锚点价值衰减熵。0=全部高价值, 1=全部低价值 — 纯函数，不改 state"""
@@ -173,7 +173,7 @@ def cpe_dimension_entropy(state: WorkspaceState) -> dict:
 
 
 # ==============================================================================
-# 综合熵值（八维加权 — CPE三维 + 原六维去重后五维 = 八维）
+# 综合熵值（九维加权 — 六维基础 + CPE三维 = 九维）
 # ==============================================================================
 
 def calculate(state: WorkspaceState,
@@ -182,9 +182,9 @@ def calculate(state: WorkspaceState,
               w_decay: float = 0.10, w_strength: float = 0.10,
               w_retro: float = 0.15, w_behavior: float = 0.10,
               w_generalize: float = 0.10) -> float:
-    """综合熵值 0.0-1.0（八维加权 — 新增CPE三维）
+    """综合熵值 0.0-1.0（九维加权 — 新增CPE三维）
 
-    CPE 三维权重合计 0.35，与原五维（0.65）形成均衡。
+    CPE 三维权重合计 0.35，与六维基础（0.65）形成均衡。
     """
     return (
         w_drift * anchor_drift(state) +
@@ -200,7 +200,7 @@ def calculate(state: WorkspaceState,
 
 
 def calculate_detail(state: WorkspaceState) -> dict:
-    """返回八维详细熵值（用于 display 和诊断）"""
+    """返回九维详细熵值（用于 display 和诊断）"""
     return {
         "anchor_drift": anchor_drift(state),
         "conflict_density": conflict_density(state),

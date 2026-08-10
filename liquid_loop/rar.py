@@ -20,7 +20,13 @@ import time
 from datetime import datetime
 
 # ── token / entity extraction ──────────────────────────────
-_TOKEN = re.compile(r"[a-z0-9_]+", re.I)
+_TOKEN = re.compile(r"[a-z0-9_]+|[\u4e00-\u9fff]", re.I)
+# 中文按单字切（与 selfspin 同源字符级：中文单字 + 英数串），虚词/高频字作
+# 停用过滤，避免噪声。此前仅 [a-z0-9_]+ → 中文 _tokens 恒空 → 中文检索失效。
+_CJK = re.compile(r"[\u4e00-\u9fff]")
+_STOP_CJK = set(
+    "的了吗呢吧啊哟哦嗯是与我不人都和也就很着没看说自己这那它她什么怎么哪"
+)
 _NAME = re.compile(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3})\b")
 _ACR = re.compile(r"\b([A-Z]{2,6})\b")
 _DATE = re.compile(
@@ -98,8 +104,15 @@ def _struct_entities(text: str) -> set:
 
 
 def _tokens(text: str) -> set:
-    return {t.lower() for t in _TOKEN.findall(text or "")
-            if len(t) >= 3 and t.lower() not in _STOP}
+    out: set = set()
+    for t in _TOKEN.findall(text or ""):
+        tl = t.lower()
+        if _CJK.match(t):                       # 中文单字：保留（过滤虚词）
+            if tl not in _STOP_CJK:
+                out.add(tl)
+        elif len(tl) >= 3 and tl not in _STOP:  # 英文 / 数字：原逻辑
+            out.add(tl)
+    return out
 
 
 def _jaccard(a: str, b: str) -> float:

@@ -59,7 +59,7 @@ def main():
     print("\n📊 步骤 4: 认知健康度 (熵值)")
     entropy = calculate(state)
     status = "🟢 GREEN" if entropy < 0.3 else ("🟡 YELLOW" if entropy < 0.6 else "🔴 RED")
-    print(f"   综合熵值(八维加权): {entropy:.4f} → {status}")
+    print(f"   综合熵值(九维加权): {entropy:.4f} → {status}")
     print(f"   锚点稳定性: 用户偏好={state.anchors[0].stability:.2f}")
 
     # ── 6. 持久化 ──────────────────────────────────────────

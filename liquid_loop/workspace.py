@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import re
+import logging
 from collections import Counter, defaultdict
 
 from .cognitive_budget import CognitiveBudgetStabilizer
@@ -71,6 +72,50 @@ class AuditChain:
 DensityLevel = str  # "high" | "medium" | "low"
 CognitiveStage = str  # "raw" | "wip" | "crystallized" | "tooling"
 LiquidityLevel = str  # "hot" | "warm" | "cold" | "frozen"
+
+# ── v1.7 证据老化回收（督办项警示①落地：append-only 长期会崩）──
+# 警示①（上交+清华 Agent-Native Memory 横评）："many append-only stores collapse on long
+# horizons as evidence ages" → 液环须主动 lifecycle，而非仅 append。
+# 机制：长期未被召回 + 权重冷却到地板 + 非结晶来源 + 非冲突证据 → 冷归档(archived=True)。
+# 守铁律：零丢失(archived≠删) / 可审计(archived_at) / 保留时序(timestamp完整) / 禁向量。
+#
+# ── v1.7.1 理论基点（增益自适应 efficient-coding 映射，2026-08-10 深挖）──
+# 论文 Prat-Carrabin et al. (Nature Communications 2026, s41467-026-73032-0)：
+#   生物大脑自适应不靠改连接(重连/重训)，靠调增益(gain modulation)，目标函数
+#   cost = α·解码准确性 + β·放电成本 —— 单一 objective 统一"prior attraction/adapter
+#   repulsion"两个矛盾现象。这与液环"调权重 > 重写证据"同构。
+# 液环映射：
+#   decoding_accuracy(回忆准确性)  ↔ 保留高权重/近期证据（防误归档丢有用信息）
+#   memory_entropy_cost(记忆熵增成本) ↔ 激活集膨胀/检索噪声/存储负担（由老化回收抑制）
+#   gain modulation(增益调节)        ↔ evidence.weight 衰减（lifecycle 调权重冷归档，不删结构）
+# 双判据推导（见 _derive_lifecycle_thresholds）：
+#   floor_weight = β   （熵增成本权重直接作归档地板：越怕熵增越激进清）
+#   ttl_eps      = HORIZON（回忆效用半衰期：accuracy 侧容忍上限，与 rar.py 180d decay 对齐）
+LIFECYCLE_ACCURACY_PRIORITY = 0.85        # α：偏向保留准确性（防误归档）
+LIFECYCLE_ENTROPY_COST_WEIGHT = 0.15      # β：熵增成本权重 = 归档地板（默认 0.15）
+LIFECYCLE_MEMORY_HORIZON = 180 * 86400    # 回忆效用半衰期（与 rar.py 180-day decay 对齐）
+
+
+def _derive_lifecycle_thresholds(
+    alpha: float = LIFECYCLE_ACCURACY_PRIORITY,
+    beta: float = LIFECYCLE_ENTROPY_COST_WEIGHT,
+    horizon: float = LIFECYCLE_MEMORY_HORIZON,
+) -> tuple[float, float]:
+    """从 efficient-coding trade-off 推导 lifecycle 双判据。
+
+    映射：cost = α·(decoding_accuracy) + β·(memory_entropy_cost)。
+    归一化约束 α+β=1 → floor_weight = β（熵增成本权重即归档地板）；
+    ttl_eps = horizon（回忆效用半衰期，accuracy 侧容忍上限）。
+    默认参数精确复现 v1.7 经验值 0.15 / 180d，向后兼容。
+    调参用 efficient-coding 语言：β↑→更激进归档；horizon↑→更长保留。
+    """
+    floor = beta
+    ttl = horizon
+    return floor, ttl
+
+
+# 导出常量（沿用现状默认值，向后兼容测试与实战零误冻）
+LIFECYCLE_FLOOR_WEIGHT, LIFECYCLE_TTL_EPS = _derive_lifecycle_thresholds()
 
 
 @dataclass
@@ -166,6 +211,10 @@ class Evidence:
     causal: dict = field(default_factory=dict)  # {causes,caused_by,enables,contradicts} -> list[node_id]
     # ── v1.4 原理优先成核（MSM 反哺）：证据所例证的「原理/why」──
     principle: str = ""  # 该证据例证的原理陈述（非空→参与原理优先成核；守禁向量=结构化文本非 embedding）
+    # ── v1.5 注意力增益（#115 神经科学实证：多看几眼=价值升）──
+    recall_hits: int = 0  # 被召回命中次数（gaze 增益信号源；黏滞升稳由 register_recall 驱动）
+    last_recall_at: str = ""  # 最近被召回时间戳（老化回收判据源；空=从未召回）
+    archived_at: str = ""  # 被 lifecycle 冷归档的时间戳（审计展示用，零丢失）
 
 
 @dataclass
@@ -188,6 +237,8 @@ class Memory:
     # ── v1.4 原理优先成核（MSM 反哺）──
     principle: str = ""          # 该记忆例证的原理/why（非空=携带原理）
     principle_grounded: bool = False  # True=由共享 principle 的证据结晶（why 先于 how 的首类核心）
+    attn_bonus: float = 0.0  # #115 注意力增益：被反复召回证据的 support 加成（仅增 s，不削 c，守反证轨）
+    replay_pressure: float = 0.0  # #116 重放压力感知：over-replay 的 contradiction 累计超额召回次数（≥0）
 
 
 @dataclass
@@ -227,8 +278,8 @@ def _get_version() -> str:
     pyproject = Path(__file__).parent.parent / "pyproject.toml"
     if pyproject.exists():
         data = tomllib.loads(pyproject.read_text())
-        return data.get("project", {}).get("version", "0.5.4")
-    return "0.5.4"
+        return data.get("project", {}).get("version", "1.8.0")
+    return "1.8.0"
 
 @dataclass
 class WorkspaceState:
@@ -318,6 +369,7 @@ class WorkspaceState:
         self._recalc_anchor(anchor_id)
         self._detect_conflicts(anchor_id)
         self._stabilize_budget()
+        self._lifecycle_sweep()  # v1.7 老化回收：写入时顺带清理过期证据
 
     def _stabilize_budget(self):
         """认知预算稳态（PEEK 落地）：超预算时冷归档最低价值证据。默认无预算不动作。"""
@@ -584,6 +636,12 @@ class WorkspaceState:
                evidences；缺省时内部构建，保持单锚点调用方行为不变）。
         """
         CONTRADICTION_WEIGHT = 2.0
+        ATTENTION_GAIN_WEIGHT = 0.15  # #115：被召回证据的 support 加成权重（温和，守反证轨）
+        _ATTN_HIT_CAP = 10            # 召回次数封顶（防无限增益）
+        # #116 重放压力感知 + 反证轨局部阻尼：负向记忆(contradiction)重放超频 → 局部降温
+        REPLAY_PRESSURE_THRESHOLD = 10  # 与 _ATTN_HIT_CAP 对齐：recall 超此阈值视为病理超频
+        REPLAY_DAMP_RATE = 0.05         # 每超 1 次命中，降该 contradiction 对分母 c 的贡献权
+        REPLAY_DAMP_FLOOR = 0.3         # 阻尼地板：局部降温不归零（守零丢失，contradiction 仍计数）
         if group is None:
             group = [e for e in self.evidences if e.anchor_id == anchor_id]
         group = [e for e in group if not e.archived]  # 统一过滤：无论传入/构建均排除归档证据
@@ -603,11 +661,31 @@ class WorkspaceState:
                 contradicts = [e for e in group
                                if e.relation == "contradiction" and not e.target_memory_id]
             s = len(supports)
-            c = len(contradicts)
+            c_raw = len(contradicts)
+            # #115 注意力增益：被反复召回的证据黏滞升稳（多看几眼=价值升）
+            # 仅对 support 证据累加，且只增 s 不削 c → 不破坏反证轨 stability 公式
+            attn_bonus = sum(ATTENTION_GAIN_WEIGHT * min(e.recall_hits, _ATTN_HIT_CAP)
+                             for e in supports)
+            s_eff = s + attn_bonus
+            # #116 反证轨局部阻尼：被反复召回(recall_hits 超阈)的 contradiction 局部降温，
+            # 防单一印痕超频重放碎片化整体稳定性；常态(recall_hits≤阈)阻尼=1→等价原公式 s/(s+2c+1)。
+            c_eff = 0.0
+            pressure = 0.0
+            for e in contradicts:
+                hits = e.recall_hits
+                if hits > REPLAY_PRESSURE_THRESHOLD:
+                    damp = max(REPLAY_DAMP_FLOOR,
+                               1.0 - REPLAY_DAMP_RATE * (hits - REPLAY_PRESSURE_THRESHOLD))
+                    pressure += (hits - REPLAY_PRESSURE_THRESHOLD)
+                else:
+                    damp = 1.0
+                c_eff += CONTRADICTION_WEIGHT * damp
             m.support_count = s
-            m.contradiction_count = c
+            m.attn_bonus = round(attn_bonus, 3)
+            m.contradiction_count = c_raw
+            m.replay_pressure = round(pressure, 3)
             m.stability = round(min(1.0, max(0.0,
-                                s / (s + CONTRADICTION_WEIGHT * c + 1))), 3)
+                                s_eff / (s_eff + c_eff + 1))), 3)
             if supports:
                 m.last_reinforced = max(e.timestamp for e in supports)
                 m.last_reinforced_iter = max(e.added_iter for e in supports)
@@ -652,6 +730,114 @@ class WorkspaceState:
             self._recalc_anchor(a.id, group=ev_by_anchor.get(a.id, []))
         self._iteration += dt  # 推进有效状态更新计数（τ）
         self.updated_at = now()
+
+    # ── v1.5 注意力增益（#115 神经科学实证：多看几眼=价值升）──
+    def register_recall(self, evidence_ids):
+        """记录证据被召回命中 → 黏滞升稳（gaze 增益↔τ(x) 黏滞吸收）。
+
+        #115 实证：人类面对多选项系统性低估中间项，但注意力（多看几眼）像增益旋钮
+        因果重塑主观价值（关键窗口在奖励揭晓前）。映射到液环：被反复召回的证据黏滞升稳，
+        对应三轨成核门槛≥2 + active recall 反复读取的离散版「升权」。
+
+        守关键窗口（证据吸收须在 crystallization 前）：仅对未归档证据升权；
+        已归档(archived)证据不升（零丢失，仅降权不增权）。
+        """
+        ATTENTION_GAIN_K = 0.15  # 黏滞系数：每次召回把 weight 向 1.0 渐进逼近
+        ids = set(evidence_ids) if evidence_ids else set()
+        for e in self.evidences:
+            if e.id in ids and not e.archived:
+                e.recall_hits += 1
+                e.last_recall_at = now()  # 记录召回时间，供 lifecycle 老化判据
+                # 黏滞增益：gaze 增益饱和曲线（多看一次不立即封顶，黏滞累积）
+                e.weight = min(1.0, e.weight + ATTENTION_GAIN_K * (1.0 - e.weight))
+
+    # ── v1.7 证据老化回收（督办项警示①落地）──
+    def _lifecycle_sweep(self) -> dict:
+        """主动老化回收：长期未召回 + 权重冷却到地板 + 非结晶来源 + 非冲突 → 冷归档。
+
+        直接消警示①（append-only 长期 horizon 退化）：避免无限 append 致激活集膨胀。
+        守铁律：archived=True 仅冷归档零丢失（可被解冻）；archived_at 留痕可审计；
+        timestamp 完整保留（守警示②：语义压缩销毁时序线索 → 此处不压缩、仅隔离）。
+        不依赖相似度（守警示③ / 禁向量铁律）。
+        双判据理论基点（v1.7.1）：floor_weight=β(熵增成本权重)、ttl_eps=horizon(回忆效用半衰期)，
+        来自增益自适应 efficient-coding objective（cost=α·准确性+β·熵增成本）的归一化推导，
+        与"调权重>重写证据"同源——增益调节而非重连的生物实证支撑。
+        """
+        protected = {eid for m in self.memories for eid in m.evidence_ids}
+        now_ts = now()
+        swept: list[str] = []
+        for e in self.evidences:
+            if e.archived:
+                continue
+            if e.id in protected:
+                continue  # 结晶血缘保护：被任一 memory 引用的证据不归档
+            if e.relation == "contradiction":
+                continue  # 冲突证据零丢失优先（守反证轨对抗群体幻觉）
+            # 年龄判据：优先用最后召回时间，否则用创建时间(timestamp)；二者皆空→保守不归档
+            ref_ts = e.last_recall_at or e.timestamp
+            if not ref_ts:
+                continue
+            try:
+                age = (datetime.fromisoformat(now_ts) - datetime.fromisoformat(ref_ts)).total_seconds()
+            except ValueError:
+                continue
+            if age < LIFECYCLE_TTL_EPS:
+                continue  # 未老化超 TTL（新记忆/近期召回）→ 不归档
+            if e.weight >= LIFECYCLE_FLOOR_WEIGHT:
+                continue  # 权重未冷却到地板 → 仍活跃
+            # 老化超 TTL 且权重冷却到地板 → 冷归档
+            e.archived = True
+            e.archived_at = now_ts
+            swept.append(e.id)
+        if swept:
+            self.updated_at = now_ts
+        return {"swept": len(swept), "swept_ids": swept, "total": len(self.evidences)}
+
+    def lifecycle_sweep(self) -> dict:
+        """公开老化回收入口（供 8790 手动/定时触发，或测试）。"""
+        return self._lifecycle_sweep()
+
+    def recall(self, query: str, agent_id: str = "", top_k: int = 5):
+        """统一召回入口（封装 RAR 倒排索引）+ 自动 register_recall。
+
+        命中 evidence 类型的结果自动 bump 注意力增益（#115 多看几眼=价值升）。
+        返回 [(mid, score, meta), ...]，与 RARIndex.recall 兼容。
+        注意：LiquidReweight / LiquidSelfSpin 为 client 引擎/意识层，独立运行时不经此入口；
+        其命中若在 server 层走 RAR 仍由本方法覆盖（server 可逐步切换至此入口）。
+        """
+        from .rar import RARIndex
+        cands = RARIndex.visible_candidates(self, agent_id)
+        if not cands:
+            return []
+        # 用 RARIndex.build 每次独立构建（不依赖 build_or_cache 的跨 state 缓存，
+        # 其 key 仅含 version+agent_id，会复用旧 idx 致跨 state 污染 → evidence 不被 bump）
+        idx = RARIndex.build(cands, version=getattr(self, "version", ""))
+        hits = idx.recall(query, top_k=top_k)
+        ev_ids = [mid for (mid, _sc, meta) in hits if meta.get("type") == "evidence"]
+        if ev_ids:
+            self.register_recall(ev_ids)
+        return hits
+
+    def perceive_replay_pressure(self) -> dict:
+        """重放压力感知（#116）：暴露存在 over-replay 的 contradiction 的 memory 及其压力值。
+
+        Science 2026-06-04 实证：压力记忆印迹的病理性频繁自发重放是睡眠碎片化核心驱动力，
+        靶向单一印痕抑制即可逆转。本方法把该"压力"显式暴露，供上层决策；
+        局部阻尼已在 `._update_memory_stability` 中按 recall_hits 超阈自动触发（靶向单印痕降温）。
+
+        返回 {memory_id: {content, replay_pressure, stability}, ...}，仅含压力>0 的 memory。
+        """
+        out: dict = {}
+        for m in self.memories:
+            pressure = getattr(m, "replay_pressure", 0.0)
+            if pressure > 0.0:
+                content = m.content if len(m.content) <= 40 else m.content[:40] + "..."
+                out[m.id] = {
+                    "content": content,
+                    "replay_pressure": pressure,
+                    "stability": m.stability,
+                }
+        return out
 
     # ─────────────────────────────────────────────────────────────
     # v0.9.3 多智能体授权原语
@@ -824,8 +1010,8 @@ def _save_dissolve_votes(root: Path, votes: dict) -> None:
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(json.dumps(votes, ensure_ascii=False), encoding="utf-8")
-    except Exception:
-        pass
+    except Exception as e:
+        logging.getLogger(__name__).warning("dissolve_votes persist failed: %s", e)
 
 
 # ==============================================================================

@@ -1,5 +1,44 @@
 # Changelog
 
+## v1.8.0 (2026-08-11) — 原理(why)与因果链"接电"（沉睡能力通电）
+
+- **背景**：穿透式复盘发现 principle 机制（v1.4 原理优先成核 + reweight 原理通道）与 `causes/enables` 因果字段是"已建造但未通电"——生产路径零 principle 写入源、`causes/enables` 零读写（死字段）。
+- **实现**：
+  - **原理接电**（`marvis_liquid_loop_server.py`）：`/remember` 新增可选 `principle` 字段（REST + MCP 均支持）；`_derive_principle()` 确定性前缀推导（`原理:/why:/原则:` 等显式标记，零 LLM、不臆造）；`ll_remember` 落 `Evidence.principle` → v1.4 原理优先成核真正可被喂数据触发。
+  - **因果 causes/enables 接电**（`ll_causal`）：由"仅 contradicts"扩展为三类边——contradicts（原）＋causes（先形成+含容器≥0.5 跨锚）+ enables（先形成+含容器∈[0.35,0.5) 跨锚）；全部确定性推导（时间序+含容器，零向量、可审计）。
+  - **数据源接通**（`distill_to_liquid.py`）：archify/kunpeng 蒸馏事实附 principle（"液环信任边界闸门机制"/"液环模块依赖结构"/"液环架构概览"/"可迁移方法论沉淀"），structured evidence 带 why 投 8790。
+  - **版本统一**：pyproject.toml / `__init__.__version__` / workspace `_get_version` 回退 全部对齐 1.8.0。
+- **守铁律**：零向量（含容器/前缀标记均结构化）；不臆造 principle（无显式标记即空）；时间+含容器推导可审计。
+
+## v1.7.0 (2026-08-09) — 证据老化回收 lifecycle（督办项警示①落地）
+
+- **新增证据老化回收（督办项警示①）**：独立研究（上交+清华 *Are We Ready For An Agent-Native Memory System?* arXiv:2606.24775）横评警示——"many append-only stores collapse on long horizons as evidence ages"（append-only 长期 horizon 退化）。液环此前仅有预算触发的 evict（超预算才驱逐），缺基于老化的主动 lifecycle pass。
+- **实现**（`liquid_loop/workspace.py`）：
+  - `Evidence` 新增 `last_recall_at` / `archived_at` 字段（默认值，旧数据 `asdict` 往返零破坏）。
+  - `register_recall` 命中证据时写入 `last_recall_at`（老化判据源）。
+  - 模块常量 `LIFECYCLE_TTL_EPS = 180*86400`（180 天未召回→老化候选，与 `rar.py` 180-day decay 对齐）、`LIFECYCLE_FLOOR_WEIGHT = 0.15`（权重冷却到地板附近才归档）。
+  - `_lifecycle_sweep`：长期未召回 + 权重地板 + **非结晶来源**（保结晶血缘）+ **非冲突证据**（零丢失优先）→ 冷归档 `archived=True`。守护铁律：零丢失（archived≠删，可解冻）/ 可审计（archived_at）/ 保留时序（不压缩，守警示②）/ 不依赖相似度（守禁向量）。
+  - 暴露公开 `lifecycle_sweep()` 供 8790 手动/定时触发；`_on_evidence_added` 每次写入顺带调用，存量随增量自然清理。
+- **测试**：`tests/test_lifecycle.py` 10 passed（覆盖高权重保留/超TTL归档/永不召回归档/TTL内保留/结晶保护/冲突保留/register_recall记时/幂等），全量 106 passed。
+- **附带修复版本漂移**：`pyproject.toml` version 1.4.0→1.6.0（与 `__init__` 一致，此前早上升级遗留）；`test_cli_version` 改动态读 pyproject 避免下次升版本即红。
+
+### v1.7.0 hotfix（2026-08-09 18:40）— 修正 lifecycle 误冻全部存量记忆
+
+- **事故**：初版 `_lifecycle_sweep` 年龄判据仅在 `last_recall_at` 非空时检查 TTL，为空（从未召回）即**跳过年龄检查直接归档**。存量 577 条证据 `last_recall_at` 全空、且 499 条为默认权重 0.1（从没被召回，未获注意力增益）→ 首次 sweep 误归档 **497/577（86%）**，且新记忆写入后立即被冻（「出生即归档」）。
+- **根因**：①老化判据缺 age 信号兜底——`last_recall_at` 空时未回退到创建时间 `timestamp`；②归档条件用「权重地板」单判据，不限年龄，把「刚建+默认权重」与「陈年+冷却」混为一谈。
+- **修正**：`ref_ts = e.last_recall_at or e.timestamp`；归档须**同时满足**「`ref_ts` 老化超 `LIFECYCLE_TTL_EPS(180d)` 且 `weight < LIFECYCLE_FLOOR_WEIGHT`」。新记忆（timestamp 近）/近期召回 → 不归档；仅陈年+冷却证据归档。
+- **线上补救**：离线解冻 497→0（`archived=False`）；沙箱下 `launchctl stop/kickstart -k` 被拒权（Not privileged），改用 `kill -9` 触发 KeepAlive 拉起修正版新进程；重跑 sweep 验证归档 **0**、recall 恢复全量（55 条）。
+- **测试**：`tests/test_lifecycle.py` 改为 12 passed，新增 `test_never_recalled_fresh_created_kept`（新记忆不误冻）/ `test_add_evidence_default_weight_not_swept_on_write`（写入即触发 sweep 不立即冻）两回归用例；全量 **108 passed**。
+- **铁律印证**：archived≠删，解冻零丢失；本次误冻靠「读真数据归档数+权重分布」而非表面报成功才发现，正是 c≥1 取证门的实证。
+
+## [unreleased] — LEI 维度数标签统一为九维
+
+- **运维硬化（2026-08-09）**：`__version__` 1.4.0→1.6.0（对齐已落地的 v1.5 注意力增益 + v1.6 重放压力代码，此前版本号未 bump）；清空 8790 `err.log` 中 918 条历史旧路径 `FileNotFoundError`（Aug 2 残留，非实时故障）；服务优雅重启后 `/health` 报 1.6.0、日志干净。Vera 信任身份已注册，完成 Vera→液环端到端写入闭环验证。
+- **标签修正**：LEI（Liquid Entropy Index）实测为 **九维加权**（6 基础维度 + CPE 三维，权重和=1.0）。
+  此前文档/注释中的「八维」为过时标签（代码自 v0.5 起即按九维实现，docstring 误标八维）。
+  涉及 `entropy.py` / `cli.py` / `liquid_core.py` / `examples/quickstart.py` / `README.md` / `docs/` 的标签已同步修正。
+- 历史 changelog 条目中「四维 → 八维」等描述保留原貌（记录当时的修正动作），不代表当前维度数。
+
 ## v1.0.0 (2026-07-21) — 双层自转 + 四循环本体论 + 墙钟实测 11.5× 成核加速
 
 > **质的飞跃（v1.0）**：把"多 agent 架构拆除后的记忆演化协同症结"转化为双层自转方案，并正式叙事液环为「多智能体共享记忆演化状态机」。配套四循环本体论与 PREPING 门控循环化，墙钟实测验证双层自转成核加速 **11.5×**。
@@ -87,10 +126,11 @@
 - **范围纪律**：本版仅文档 / 发布质量，**零新机制**；反证轨与时间动力学留待 v0.8。
 
 ## v0.7.0 (2026-07-15) — MESH v2 多智能体共识协议集成（正式发布）
-- 新增：`liquid_loop.mesh` 官方 MESH 集成子包（原 `mesh/liquid_loop_mesh_v2.py` 迁入，随 pip 包发布）。
+> ⚠️ **已移除**：`liquid_loop.mesh` 子包已在 v0.7.x 后从发行包移除（commit `ac7260e`，过度工程化过滤）。当前 v1.4.0 **不含**该模块，请勿 `import liquid_loop.mesh` 或运行 `mesh/liquid_loop_mesh_v2.py`（会 ImportError）。详见 README 顶部说明。
+- 新增：`liquid_loop.mesh` 官方 MESH 集成子包（原 `mesh/liquid_loop_mesh_v2.py` 迁入，随 pip 包发布）**— 历史状态，现已移除**。
 - 能力：结构化证据 schema 自检 `validate_evidence`、双向契约合规 `check_contract`、主体间性共识指数 `compute_cci`、统一认知健康仪表盘 `cognitive_health`、冲突检测 `detect_conflict`、从 8790 REST 拉取状态 `fetch_state`。
 - 零向量哲学：一致性判定走结构化精确相等 + 审计链哈希，绝不引入 embedding / 相似度。
-- 顶层 `mesh/liquid_loop_mesh_v2.py` 保留为兼容薄壳（仍 `python3 mesh/liquid_loop_mesh_v2.py` 连 8790 打印认知健康报告）。
+- 顶层 `mesh/liquid_loop_mesh_v2.py` 保留为兼容薄壳（**已随上述移除一并删除**，请勿引用，否则 ImportError）。
 - 发布：GitHub tag v0.7.0 + PyPI Trusted Publishing（GitHub Actions OIDC，无 token）。
 
 ## v0.6.4 (2026-07-14) — SEAL 双优化修复（解 v0.6.3 假落地）

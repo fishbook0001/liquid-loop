@@ -44,6 +44,7 @@ import re
 import json
 import time
 import hashlib
+import logging
 import argparse
 import urllib.request
 import urllib.error
@@ -174,6 +175,7 @@ class LiquidSelfSpin:
         # 液态重排持久化（v1.2.0）：激活态跨会话保持「活」
         self.liquid_persist = True
         self.liquid_cache_dir = os.path.expanduser("~/.liquidloop")
+        self._persist_errors = 0  # 持久化失败计数（去吞错：让故障可观测）
         self._lr = None  # 持久化 LiquidReweight 实例（懒构造，复用跨 recall）
 
     # ── 本地快自转：摄入 ──
@@ -192,8 +194,10 @@ class LiquidSelfSpin:
                 for f in self._facts[report_id]:
                     lr.propagate(self._liquid_anchor_id(f), f, steps=1)
                 lr.save()
-            except Exception:
-                pass
+            except Exception as e:
+                self._persist_errors += 1
+                logging.getLogger(__name__).warning(
+                    "liquid persist failed for %s: %s", report_id, e)
         return len(self._facts[report_id])
 
     # ── 液态重排持久化支持（v1.2.0）──
