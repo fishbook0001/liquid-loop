@@ -215,6 +215,12 @@ class Evidence:
     recall_hits: int = 0  # 被召回命中次数（gaze 增益信号源；黏滞升稳由 register_recall 驱动）
     last_recall_at: str = ""  # 最近被召回时间戳（老化回收判据源；空=从未召回）
     archived_at: str = ""  # 被 lifecycle 冷归档的时间戳（审计展示用，零丢失）
+    # ── v1.8 软取代（supersede）原语：显式语义取代（区别于 lifecycle 自动老化归档）──
+    # 与 archived 正交：archived=熵增清理(低权+久未召回)；superseded_by=被另一条更优/更新
+    # 证据显式取代(语义冗余)。二者皆零丢失可解冻；active recall 退出活跃，list 全量审计可见。
+    superseded_by: str = ""  # 本证据被哪条 winner 证据取代（空=未被取代）
+    supersedes: list = field(default_factory=list)  # 本证据取代过的 loser 证据 id 列表（反向指针/血缘）
+    superseded_at: str = ""  # 被取代/取代发生的时间戳（审计展示用）
 
 
 @dataclass
@@ -278,8 +284,8 @@ def _get_version() -> str:
     pyproject = Path(__file__).parent.parent / "pyproject.toml"
     if pyproject.exists():
         data = tomllib.loads(pyproject.read_text())
-        return data.get("project", {}).get("version", "1.8.0")
-    return "1.8.0"
+        return data.get("project", {}).get("version", "1.8.1")
+    return "1.8.1"
 
 @dataclass
 class WorkspaceState:
@@ -745,11 +751,49 @@ class WorkspaceState:
         ATTENTION_GAIN_K = 0.15  # 黏滞系数：每次召回把 weight 向 1.0 渐进逼近
         ids = set(evidence_ids) if evidence_ids else set()
         for e in self.evidences:
-            if e.id in ids and not e.archived:
+            if e.id in ids and not e.archived and not e.superseded_by:
                 e.recall_hits += 1
                 e.last_recall_at = now()  # 记录召回时间，供 lifecycle 老化判据
                 # 黏滞增益：gaze 增益饱和曲线（多看一次不立即封顶，黏滞累积）
                 e.weight = min(1.0, e.weight + ATTENTION_GAIN_K * (1.0 - e.weight))
+
+    # ── v1.8 软取代（supersede）原语：显式语义取代（区别于 lifecycle 自动老化归档）──
+    def supersede_evidence(self, loser_id: str, winner_id: str) -> dict:
+        """软取代：loser 被 winner 显式取代（语义冗余）。
+
+        零丢失（不删 loser，仅标 superseded_by + 时间戳）；winner 反向记录 supersedes 血缘指针，
+        使"我取代了谁"可审计。与 archived 正交：archived=熵增自动清理；superseded_by=治理动作显式取代。
+        二者皆退出 active recall（见 register_recall / ll_recall 过滤）、list 全量可见供审计。
+
+        调用方负责 save()（与 archive / _lifecycle_sweep 之外治理动作一致）。
+        防呆：
+          - loser==winner → 拒绝（自取代无意义）
+          - winner 不存在 → 拒绝（取代者须先存在，否则丧失血缘根基）
+          - 重复取代同一 winner → 幂等（supersedes 去重，不堆叠）
+        """
+        if loser_id == winner_id:
+            return {"ok": False, "error": "self_supersede_rejected", "loser_id": loser_id}
+        by_id = {e.id: e for e in self.evidences}
+        if loser_id not in by_id:
+            return {"ok": False, "error": "loser_not_found", "loser_id": loser_id}
+        if winner_id not in by_id:
+            return {"ok": False, "error": "winner_not_found", "winner_id": winner_id}
+        loser = by_id[loser_id]
+        winner = by_id[winner_id]
+        ts = now()
+        loser.superseded_by = winner_id
+        loser.superseded_at = ts
+        if loser_id not in winner.supersedes:
+            winner.supersedes.append(loser_id)  # 记录被取代者（反向血缘指针）
+            winner.supersedes = sorted(set(winner.supersedes))
+        if not winner.superseded_at:
+            winner.superseded_at = ts
+        return {
+            "ok": True, "loser_id": loser_id, "winner_id": winner_id,
+            "loser_superseded_by": loser.superseded_by,
+            "winner_supersedes": winner.supersedes,
+            "timestamp": ts,
+        }
 
     # ── v1.7 证据老化回收（督办项警示①落地）──
     def _lifecycle_sweep(self) -> dict:

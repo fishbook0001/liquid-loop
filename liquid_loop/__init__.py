@@ -1,5 +1,5 @@
-"""Liquid Loop — Workspace Cognitive Runtime v1.8.0 (禁向量·活态液态神经网络：成核门槛/反证轨/老化回收/原理优先成核/因果演化)"""
-__version__ = "1.8.0"
+"""Liquid Loop — Workspace Cognitive Runtime v1.8.1 (禁向量·活态液态神经网络：成核门槛/反证轨/老化回收/原理优先成核/因果演化/软取代supersede)"""
+__version__ = "1.8.1"
 
 from .workspace import (
     WorkspaceState, Anchor, Evidence, Memory, Conflict,

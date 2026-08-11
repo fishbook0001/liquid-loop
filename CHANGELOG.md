@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.8.1 (2026-08-11) — 软取代 supersede 原语（显式语义治理，零丢失）
+
+- **背景**：11:35 记忆治理时发现液环缺「显式 supersede（软取代+指针）」原语——初版记录与修正记录并列冗余，只能以 `archived` 近似（熵增清理语义，非显式取代语义）。
+- **实现**：
+  - **Evidence 新增三字段**：`superseded_by`（被谁取代）/ `supersedes`（取代过谁，反向血缘指针）/ `superseded_at`。带默认值 → `asdict`/`_from_dict` 兼容，旧数据零破坏。
+  - **`WorkspaceState.supersede_evidence(loser, winner)`**：设 `loser.superseded_by=winner` + `winner.supersedes` 反向指针 + 时间戳；防呆（自取代/winner·loser不存在拒绝）、幂等（不堆叠）。
+  - **活跃召回退出**：`register_recall` 与被取代证据跳过；server `ll_recall` cands 过滤 `superseded_by`（退出活跃召回）；`/supersede` REST 端点（委托核心+落盘）。
+  - **正交设计**：`archived`=熵增自动清理；`superseded_by`=治理动作显式取代。二者皆零丢失可解冻、`list` 全量审计可见。
+- **守铁律**：零向量（纯结构化指针）；零丢失（不删仅标记）；可审计（时间戳+反向指针）；显式取代需 loser/winner 真实存在（防呆）。
+- **实测**：核心逻辑/序列化往返/旧数据兼容/recall 过滤/list 可见全过；真实数据 `supersede B→A`（v1.7.0 修正冗余）落地。
+
 ## v1.8.0 (2026-08-11) — 原理(why)与因果链"接电"（沉睡能力通电）
 
 - **背景**：穿透式复盘发现 principle 机制（v1.4 原理优先成核 + reweight 原理通道）与 `causes/enables` 因果字段是"已建造但未通电"——生产路径零 principle 写入源、`causes/enables` 零读写（死字段）。
