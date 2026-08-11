@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.8.2 (2026-08-11) — 治理/问责查询三件套（Semantica 借鉴：时间旅行/影响分析/实体消解）
+
+- **背景**：深度调研 Semantica（图原生可审计 AI 基础设施，GitHub 4.3k★ 镜像项目）发现三点液环可借鉴的只读查询能力——时间点快照、决策影响分析、实体消解。
+- **实现**（全部只读，守禁向量/零 LLM 铁律）：
+  - **`state_at(dt)` 时间点快照**：返回 dt 时刻应可见的记忆状态（evidence.timestamp<=dt 且未 archived/superseded；memory.formed_at<=dt）。局限标注：delete 真删的节点无法回溯（完整历史须重放 audit.log）。
+  - **`analyze_impact(node_id, depth)` 影响分析**：从节点沿 causal 出边（enables/causes/contradicts）+ 血缘（used_in，被哪个结晶引用）BFS 展开下游影响子图，分层返回，供"这条决策影响了谁"问责。
+  - **`find_duplicates(threshold, max_pairs)` 重复候选检测**：字符 bigram Jaccard（禁向量）+ blocking 预过滤（首 4 字符 + 长度比）控 O(n²)。**只报告不自动处理**（守取自动/存保守），供治理者显式 supersede。
+- **server 端点**：`GET /state_at?dt=` / `GET /impact?node_id=&depth=` / `GET /duplicates?threshold=`（只读，与 /causal 同模式）。
+- **实测**：115 passed（108 + 7 新增 test_semantica_borrow.py）。
+- **守铁律**：全只读零写路径；重复检测禁向量（字符级）；报告不越权（治理仍走 supersede + 信任分级）。
+
 ## v1.8.1 (2026-08-11) — 软取代 supersede 原语（显式语义治理，零丢失）
 
 - **背景**：11:35 记忆治理时发现液环缺「显式 supersede（软取代+指针）」原语——初版记录与修正记录并列冗余，只能以 `archived` 近似（熵增清理语义，非显式取代语义）。

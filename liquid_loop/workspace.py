@@ -284,8 +284,8 @@ def _get_version() -> str:
     pyproject = Path(__file__).parent.parent / "pyproject.toml"
     if pyproject.exists():
         data = tomllib.loads(pyproject.read_text())
-        return data.get("project", {}).get("version", "1.8.1")
-    return "1.8.1"
+        return data.get("project", {}).get("version", "1.8.2")
+    return "1.8.2"
 
 @dataclass
 class WorkspaceState:
@@ -794,6 +794,154 @@ class WorkspaceState:
             "winner_supersedes": winner.supersedes,
             "timestamp": ts,
         }
+
+    # ── v1.8.2 治理/问责查询（Semantica 借鉴：时间旅行/影响分析/实体消解，全部只读）──
+    def state_at(self, dt_str: str) -> dict:
+        """时间点快照（time-travel）：返回 dt 时刻应可见的记忆状态。
+
+        Semantica `state_at("2024-01-01")` 对应物。基于现存节点时间戳过滤：
+          - evidence：timestamp<=dt 且未 archived 且未 superseded_by
+          - memory：formed_at<=dt
+        只读零副作用。局限：被 delete 真删的节点无法回溯（液环 append-only 但 delete 是真删，
+        如需完整历史须重放 audit.log——标注为待办，本方法为近似的现行可见快照）。
+        """
+        try:
+            dt = datetime.fromisoformat(dt_str)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "invalid_datetime", "at": dt_str}
+        anchor_name = {a.id: a.name for a in self.anchors}
+        evs = []
+        for e in self.evidences:
+            if e.archived or e.superseded_by:
+                continue
+            try:
+                if datetime.fromisoformat(e.timestamp) > dt:
+                    continue
+            except ValueError:
+                continue
+            evs.append({
+                "id": e.id, "content": e.content, "agent_id": e.agent_id,
+                "category": anchor_name.get(e.anchor_id, ""),
+                "timestamp": e.timestamp,
+            })
+        mems = []
+        for m in self.memories:
+            try:
+                if datetime.fromisoformat(m.formed_at) > dt:
+                    continue
+            except ValueError:
+                continue
+            mems.append({
+                "id": m.id, "content": m.content, "scope": m.scope,
+                "contributors": m.contributors, "formed_at": m.formed_at,
+            })
+        return {"ok": True, "at": dt_str, "evidence_count": len(evs),
+                "memory_count": len(mems), "evidences": evs, "memories": mems}
+
+    def analyze_impact(self, node_id: str, depth: int = 2) -> dict:
+        """影响分析：从节点沿因果边/血缘 BFS 展开下游影响子图（决策问责）。
+
+        Semantica `analyze_decision_impact()` 对应物。出边=node.causal 的
+        enables/causes/contradicts（我催生了/使能了/反驳了谁）；血缘=引用该 evidence 的
+        结晶 Memory（used_in）。返回分层影响集，供"这条决策影响了谁"审计。只读。
+        """
+        nodes: dict = {}
+        for e in self.evidences:
+            nodes[e.id] = {"type": "evidence", "node": e}
+        for m in self.memories:
+            nodes[m.id] = {"type": "memory", "node": m}
+        if node_id not in nodes:
+            return {"ok": False, "error": "node_not_found", "node_id": node_id}
+
+        def _out(id_: str):
+            n = nodes[id_]["node"]
+            res = []
+            for rel in ("enables", "causes", "contradicts"):
+                for d in n.causal.get(rel, []):
+                    if d in nodes:
+                        res.append((d, rel))
+            if nodes[id_]["type"] == "evidence":
+                for m in self.memories:
+                    if id_ in m.evidence_ids:
+                        res.append((m.id, "used_in"))
+            return res
+
+        levels: list = []
+        frontier: list = [(node_id, "root", 0)]
+        seen = {node_id}
+        for L in range(1, int(depth) + 1):
+            nxt: list = []
+            for cur, _r, _lvl in frontier:
+                for d, r in _out(cur):
+                    if d in seen:
+                        continue
+                    seen.add(d)
+                    nxt.append((d, r, L))
+            if not nxt:
+                break
+            levels.append([{
+                "node_id": d, "type": nodes[d]["type"], "relation": r, "level": L,
+                "content": (nodes[d]["node"].content or "")[:80],
+            } for d, r, L in nxt])
+            frontier = nxt
+        return {"ok": True, "root": node_id, "depth": depth,
+                "levels": levels, "total_affected": sum(len(l) for l in levels)}
+
+    def find_duplicates(self, threshold: float = 0.8, max_pairs: int = 20) -> dict:
+        """重复候选检测（实体消解前置，禁向量）。
+
+        Semantica DuplicateDetector 对应物但走字符级：对未归档/未取代的 evidence 做
+        字符 bigram Jaccard 相似度；blocking 预过滤（首 4 字符相同 且 长度比接近）控 O(n²)。
+        只报告候选、不自动处理（守取自动/存保守铁律），供治理者显式 supersede 取代。
+        """
+        evs = [e for e in self.evidences if not e.archived and not e.superseded_by]
+        if len(evs) < 2:
+            return {"ok": True, "candidates": [], "pairs_scanned": 0}
+
+        def _bigrams(s: str):
+            s = re.sub(r"\s+", "", s or "")
+            return {s[i:i + 2] for i in range(max(0, len(s) - 1))}
+
+        def _jaccard(a: set, b: set) -> float:
+            if not a or not b:
+                return 0.0
+            return len(a & b) / len(a | b)
+
+        grams = {e.id: _bigrams(e.content) for e in evs}
+        lengths = {e.id: len(e.content or "") for e in evs}
+        by_prefix: dict = {}
+        for e in evs:
+            by_prefix.setdefault((e.content or "").strip()[:4], []).append(e.id)
+
+        scored: list = []
+        scanned = 0
+        seen_pairs: set = set()
+        for e in evs:
+            pref = (e.content or "").strip()[:4]
+            for other_id in by_prefix.get(pref, []):
+                if other_id == e.id:
+                    continue
+                key = (e.id, other_id) if e.id < other_id else (other_id, e.id)
+                if key in seen_pairs:
+                    continue
+                seen_pairs.add(key)
+                L1, L2 = lengths[e.id], lengths[other_id]
+                if L1 <= 0 or L2 <= 0:
+                    continue
+                if abs(L1 - L2) / max(L1, L2) > 0.5:
+                    continue  # 长度差异过大不可能是重复
+                scanned += 1
+                j = _jaccard(grams[e.id], grams[other_id])
+                if j >= threshold:
+                    scored.append((j, e.id, other_id))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        candidates = [{
+            "src_id": a, "dst_id": b, "similarity": round(j, 3),
+            "src": next((x.content for x in evs if x.id == a), "")[:80],
+            "dst": next((x.content for x in evs if x.id == b), "")[:80],
+        } for j, a, b in scored[:max_pairs]]
+        return {"ok": True, "candidates": candidates,
+                "pairs_scanned": scanned, "threshold": threshold}
 
     # ── v1.7 证据老化回收（督办项警示①落地）──
     def _lifecycle_sweep(self) -> dict:
