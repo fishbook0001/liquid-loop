@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.8.3 (2026-08-12) — consensus 结晶保护 + 治理 dry-run（Palantir 借鉴）
+
+- **consensus 保护**（Palantir Authority Line 细化）：`supersede_evidence` 拒绝软取代 consensus 结晶的证据——共识属于全体贡献者，只能走全员 dissolve（与 `delete_as` 同语义），防 admin 误伤共识。
+- **治理 dry-run**（Palantir dry-run 预演）：server `ll_supersede/ll_delete/ll_dissolve` 支持 `dry_run`（REST `dry_run` 字段），deepcopy 副本预演不落盘，返回 `"dry_run": true`。
+- 测试 116 passed（+1 consensus 保护）。
+
 ## v1.8.2 (2026-08-11) — 治理/问责查询三件套（Semantica 借鉴：时间旅行/影响分析/实体消解）
 
 - **背景**：深度调研 Semantica（图原生可审计 AI 基础设施，GitHub 4.3k★ 镜像项目）发现三点液环可借鉴的只读查询能力——时间点快照、决策影响分析、实体消解。

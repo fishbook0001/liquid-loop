@@ -284,8 +284,8 @@ def _get_version() -> str:
     pyproject = Path(__file__).parent.parent / "pyproject.toml"
     if pyproject.exists():
         data = tomllib.loads(pyproject.read_text())
-        return data.get("project", {}).get("version", "1.8.2")
-    return "1.8.2"
+        return data.get("project", {}).get("version", "1.8.3")
+    return "1.8.3"
 
 @dataclass
 class WorkspaceState:
@@ -770,6 +770,8 @@ class WorkspaceState:
           - loser==winner → 拒绝（自取代无意义）
           - winner 不存在 → 拒绝（取代者须先存在，否则丧失血缘根基）
           - 重复取代同一 winner → 幂等（supersedes 去重，不堆叠）
+          - v1.8.3 consensus 保护（Palantir owned 细化）：loser 若是 consensus 结晶的证据，
+            禁止单边软取代——共识证据属于全体贡献者，只能走全员 dissolve（与 delete_as 同语义）。
         """
         if loser_id == winner_id:
             return {"ok": False, "error": "self_supersede_rejected", "loser_id": loser_id}
@@ -778,6 +780,13 @@ class WorkspaceState:
             return {"ok": False, "error": "loser_not_found", "loser_id": loser_id}
         if winner_id not in by_id:
             return {"ok": False, "error": "winner_not_found", "winner_id": winner_id}
+        # v1.8.3 consensus 保护：consensus 结晶的证据禁止单边软取代（防 admin 误伤共识）
+        consensus_evidence = {eid for m in self.memories if m.scope == "consensus"
+                              for eid in m.evidence_ids}
+        if loser_id in consensus_evidence:
+            return {"ok": False,
+                    "error": "forbidden: consensus evidence requires unanimous dissolution, not single supersede",
+                    "loser_id": loser_id}
         loser = by_id[loser_id]
         winner = by_id[winner_id]
         ts = now()
