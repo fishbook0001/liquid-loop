@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.8.4 (2026-08-12) — 程序性记忆层（D3 + 调研蒸馏：PlugMem/Skill1/EvoC2F/RE-TRAC）
+
+- **`procedural_memory.py` 程序性记忆一等公民**（distill_registry 实现）：`ProceduralMemory` + `ProceduralRegistry`，与声明式 Anchor/Evidence/Memory 正交。
+  - EvoC2F 三关准入（功能/契约/回归）+ 分阶段部署（pending→shadow→canary→active|rejected）+ 不可逆技能封顶 canary 需人工放行（↔ ops_gate）。
+  - Skill1 任务路由召回：选择信用（tag 子串匹配，禁向量）× 利用信用（成功率），确定性排序。
+  - RE-TRAC 结构化笔记：`structured_note` 三组分 {answer, evidence, open} 填入技能 note。
+  - sidecar `.liquid/procedural.json` 独立持久化，非阻塞锁 + fail-open，原子写（temp+rename）。
+  - 回归门控闭环：canary 后期成功率<阈值且数据充足 → 拒绝；re-admit 保留已验证技能进度、rejected 重准入计数器清零。
+- **`context_compress.structured_note`**：RE-TRAC 同构三组分分桶（提取式、零 LLM、fail-open）。
+- **8790 server `/procmem` 端点**（admit/use/promote/list/recall）+ `_handle_rest` 全局 fail-open（REST 异常返回可见 JSON）。
+- 测试 163 collected（+19 procedural_memory：三关准入/晋级/回退/不可逆/路由/持久化/fail-open/re-admit 语义）。
+
 ## v1.8.3 (2026-08-12) — consensus 结晶保护 + 治理 dry-run（Palantir 借鉴）
 
 - **consensus 保护**（Palantir Authority Line 细化）：`supersede_evidence` 拒绝软取代 consensus 结晶的证据——共识属于全体贡献者，只能走全员 dissolve（与 `delete_as` 同语义），防 admin 误伤共识。

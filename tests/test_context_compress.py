@@ -4,6 +4,7 @@ from liquid_loop.context_compress import (
     ExtractiveCondenser,
     compress_context,
     estimate_tokens,
+    structured_note,
 )
 
 
@@ -100,3 +101,34 @@ def test_compress_context_multi_round():
     assert rep.triggered is True
     assert rep.candidates == 2
     assert rep.condensed == 2
+
+
+# ───────────── RE-TRAC 同构：结构化三组分笔记 ─────────────
+
+def test_structured_note_buckets():
+    texts = [
+        "result: 3 rows updated successfully",
+        "error: connection refused during retry",
+        "/path/to/module.py:42 the handler logic",
+        "todo: verify the edge case still holds",
+    ]
+    note = structured_note(texts, threshold=0)  # 不压缩，直接分桶
+    assert "result: 3 rows updated successfully" in note["answer"]
+    assert any("error: connection refused" in x for x in note["open"])
+    assert any("todo: verify" in x for x in note["open"])  # todo → open
+    assert any("/path/to/module.py" in x for x in note["evidence"])
+
+
+def test_structured_note_no_loss_when_disabled(monkeypatch):
+    # 默认不压缩时，所有行都进入某一桶（保底 evidence），不丢行
+    monkeypatch.delenv("LIQUID_CONTEXT_COMPRESS_TOKENS", raising=False)
+    texts = ["result: ok", "error: x", "plain line"]
+    note = structured_note(texts)
+    total = len(note["answer"]) + len(note["evidence"]) + len(note["open"])
+    assert total == 3
+
+
+def test_structured_note_fail_open():
+    # 坏输入（非 str）→ 分桶循环抛 AttributeError → fail-open 返回空桶，不崩
+    note = structured_note([12345], threshold=0)
+    assert note == {"answer": [], "evidence": [], "open": []}

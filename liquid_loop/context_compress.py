@@ -153,3 +153,62 @@ def compress_context(
     results = [{"tool": "", "content": t} for t in texts]
     out, rep = ExtractiveCondenser(threshold).condense_round(results)
     return [r["content"] for r in out], rep
+
+
+# ---------------------------------------------------------------------------
+# RE-TRAC 同构：结构化三组分笔记（提取式分桶，非生成式）
+# 把压缩后的证据/上下文按语义分桶为 {answer, evidence, open}，
+# 对应 RE-TRAC 的「当前最优答案 + 证据库 + 不确定项/待探索」。
+# 零 LLM 依赖、fail-open，契合液环「提取式、确定性、零丢失」哲学。
+# ---------------------------------------------------------------------------
+_BUCKET_ANSWER = re.compile(
+    r"(?i)("
+    r"\b(result|fixed|changed|decision|conclusion|answer|resolved|done)\b"
+    r"|结论|已修复|决定|已解决"
+    r")"
+)
+_BUCKET_OPEN = re.compile(
+    r"(?i)("
+    r"\b(failed|exception|error|uncertain|unknown|pending|todo|wip)\b"
+    r"|待探索|待定|不确定|失败|待办|未解决"
+    r")"
+)
+_BUCKET_EVIDENCE = re.compile(
+    r"(?i)("
+    r"[\w./\-]+\.(py|rs|ts|js|go|toml|json|md|yaml|yml)"  # 文件路径
+    r"|=>|==|!=|::|->"  # 代码符号
+    r"|\b(path|evidence|data|source|依据|来源|数据)\b"
+    r")"
+)
+
+
+def structured_note(
+    texts: list,
+    threshold: Optional[int] = None,
+) -> dict:
+    """RE-TRAC 同构：把多条证据/上下文压成结构化三组分笔记。
+
+    返回 {answer, evidence, open} 三个文本列表。分桶为提取式
+    （按行语义正则归类），不生成新内容，fail-open（异常返回空桶）。
+
+    - answer   : 当前最优结论 / 已修复 / 决策
+    - evidence : 路径 / 符号 / 数据 / 来源等支撑性内容（保底桶，不丢行）
+    - open     : 失败 / 异常 / 不确定 / 待探索项
+    """
+    try:
+        compressed, _ = compress_context(texts, threshold)
+        buckets = {"answer": [], "evidence": [], "open": []}
+        for t in compressed:
+            for line in t.splitlines():
+                s = line.strip()
+                if not s:
+                    continue
+                if _BUCKET_OPEN.search(s):
+                    buckets["open"].append(s)
+                elif _BUCKET_ANSWER.search(s):
+                    buckets["answer"].append(s)
+                else:
+                    buckets["evidence"].append(s)  # 保底不丢
+        return buckets
+    except Exception:
+        return {"answer": [], "evidence": [], "open": []}
