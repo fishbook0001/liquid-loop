@@ -15,3 +15,10 @@ from .recall_filter import recall_content_filter, content_aware_filter, cosine_d
 from .procedural_memory import (
     ProceduralMemory, ProceduralRegistry, procmem_recall, procmem_admit,
 )
+# 蒸馏落地的公共原语（零侵入，供 cli / server / agent loop 接入）
+from .guard import should_escalate, confirm_gate, CapabilityMenu
+from .session import SessionState, mark_abort, recover, save_session, load_session
+from .recall_filter import adaptive_recall
+from .rar import RARIndex, build_or_cache  # 公共检索 API（原 workspace 局部 import）
+# TTL 回收入口：evict_expired 是 WorkspaceState 实例方法（见 workspace.py:254），
+# 已随 WorkspaceState 一并导出；cli.prune 经 state.evict_expired() 调用。

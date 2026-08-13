@@ -1,5 +1,15 @@
 from __future__ import annotations
 
+from .textutil import (
+    now, uid, _derive_lifecycle_thresholds, _get_version,
+    _tokenize, _keyword_overlap, _judge_answer,
+    _dissolve_votes_path, _load_dissolve_votes, _save_dissolve_votes,
+)
+from .audit import AuditChain
+from .cpe import CPERegularizer
+from .self_refine import SelfRefineEngine, meta_thinker_evaluate, meta_thinker_advice
+
+
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
@@ -15,57 +25,12 @@ from collections import Counter, defaultdict
 from .cognitive_budget import CognitiveBudgetStabilizer
 
 
-def now() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
-def uid() -> str:
-    return uuid.uuid4().hex[:12]
 
 
 # ========== 链式哈希审计（借鉴 KFG MemoryGovernance）==========
 
-class AuditChain:
-    """轻量级审计链：每次变更追加 SHA256 链式哈希"""
-
-    def __init__(self, audit_path: str):
-        self._path = audit_path
-        self._chain: list[str] = []
-        self._load()
-
-    def _load(self):
-        if os.path.exists(self._path):
-            with open(self._path, "r") as f:
-                for line in f:
-                    line = line.strip()
-                    if line:
-                        parts = line.split("|")
-                        if len(parts) >= 2:
-                            self._chain.append(parts[1])
-
-    def append(self, event_type: str, data: str) -> str:
-        prev = self._chain[-1] if self._chain else "genesis"
-        chain_hash = hashlib.sha256(f"{event_type}:{data}:{prev}".encode()).hexdigest()[:16]
-        self._chain.append(chain_hash)
-        ts = now()
-        with open(self._path, "a") as f:
-            f.write(f"{ts}|{chain_hash}|{event_type}|{data}|{prev}\n")
-        return chain_hash
-
-    @property
-    def root(self) -> str:
-        return self._chain[-1] if self._chain else "genesis"
-
-    def verify(self, entry: str) -> bool:
-        """验证某条完整日志行是否匹配链中记录"""
-        if "|" not in entry:
-            return False
-        parts = entry.strip().split("|")
-        if len(parts) < 5:
-            return False
-        _, stored_hash, event_type, data, prev = parts[:5]
-        expected = hashlib.sha256(f"{event_type}:{data}:{prev}".encode()).hexdigest()[:16]
-        return expected == stored_hash
 
 
 # --- 三维锚点分类（密度 / 认知阶段 / 流动性）+ 一维证据质量 ---
@@ -91,27 +56,8 @@ LiquidityLevel = str  # "hot" | "warm" | "cold" | "frozen"
 # 双判据推导（见 _derive_lifecycle_thresholds）：
 #   floor_weight = β   （熵增成本权重直接作归档地板：越怕熵增越激进清）
 #   ttl_eps      = HORIZON（回忆效用半衰期：accuracy 侧容忍上限，与 rar.py 180d decay 对齐）
-LIFECYCLE_ACCURACY_PRIORITY = 0.85        # α：偏向保留准确性（防误归档）
-LIFECYCLE_ENTROPY_COST_WEIGHT = 0.15      # β：熵增成本权重 = 归档地板（默认 0.15）
-LIFECYCLE_MEMORY_HORIZON = 180 * 86400    # 回忆效用半衰期（与 rar.py 180-day decay 对齐）
 
 
-def _derive_lifecycle_thresholds(
-    alpha: float = LIFECYCLE_ACCURACY_PRIORITY,
-    beta: float = LIFECYCLE_ENTROPY_COST_WEIGHT,
-    horizon: float = LIFECYCLE_MEMORY_HORIZON,
-) -> tuple[float, float]:
-    """从 efficient-coding trade-off 推导 lifecycle 双判据。
-
-    映射：cost = α·(decoding_accuracy) + β·(memory_entropy_cost)。
-    归一化约束 α+β=1 → floor_weight = β（熵增成本权重即归档地板）；
-    ttl_eps = horizon（回忆效用半衰期，accuracy 侧容忍上限）。
-    默认参数精确复现 v1.7 经验值 0.15 / 180d，向后兼容。
-    调参用 efficient-coding 语言：β↑→更激进归档；horizon↑→更长保留。
-    """
-    floor = beta
-    ttl = horizon
-    return floor, ttl
 
 
 # 导出常量（沿用现状默认值，向后兼容测试与实战零误冻）
@@ -278,17 +224,6 @@ class StateSnapshot:
     conflict_count: int = 0
 
 
-def _get_version() -> str:
-    """从 pyproject.toml 读取版本号"""
-    try:
-        import tomllib
-    except ImportError:
-        import tomli as tomllib
-    pyproject = Path(__file__).parent.parent / "pyproject.toml"
-    if pyproject.exists():
-        data = tomllib.loads(pyproject.read_text())
-        return data.get("project", {}).get("version", "1.8.4")
-    return "1.8.4"
 
 @dataclass
 class WorkspaceState:
@@ -1225,25 +1160,10 @@ class WorkspaceState:
                 "voted": sorted(cast), "remaining": sorted(need - cast)}
 
 # ── dissolve 投票持久化（独立于核心 dataclass，守 North-Star 零改动）──
-def _dissolve_votes_path(root: Path) -> Path:
-    return Path(root) / ".dissolve_votes.json"
 
 
-def _load_dissolve_votes(root: Path) -> dict:
-    p = _dissolve_votes_path(root)
-    try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
 
 
-def _save_dissolve_votes(root: Path, votes: dict) -> None:
-    p = _dissolve_votes_path(root)
-    try:
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps(votes, ensure_ascii=False), encoding="utf-8")
-    except Exception as e:
-        logging.getLogger(__name__).warning("dissolve_votes persist failed: %s", e)
 
 
 # ==============================================================================
@@ -1263,244 +1183,6 @@ def _save_dissolve_votes(root: Path, votes: dict) -> None:
 #   3. 泛化防线（Generalization Guard）：同锚点下证据一致性持续下降 → 告警
 # ==============================================================================
 
-class CPERegularizer:
-    """CPE 正则化引擎：在证据添加前做能力保留裁决"""
-
-    def __init__(self, state: WorkspaceState):
-        self.state = state
-
-    def evaluate_new_evidence(self, anchor: Anchor, new_content: str) -> Dict[str, Any]:
-        """评估新证据对既有锚点体系的能力侵蚀风险（CPE §3 Regularized Self-Evolution Objective）
-
-        返回:
-            action: "PASS" | "BLOCK" | "FLAG"
-            score: 0.0(安全) ~ 1.0(高风险)
-            reasons: 原因列表
-        """
-        if not anchor.evidence_ids:
-            return {"action": "PASS", "score": 0.0, "reasons": ["锚点无现有证据，无覆盖风险"]}
-
-        evs = [e for e in self.state.evidences if e.anchor_id == anchor.id]
-        if not evs:
-            return {"action": "PASS", "score": 0.0, "reasons": ["无对应证据，安全"]}
-
-        # ── 1. 回顾性检查（Retrospective Protection）：新证据是否与旧证据方向一致 ──
-        old_contents = [e.content for e in evs if e.content]
-        overlaps = [_keyword_overlap(new_content, old) for old in old_contents]
-        max_overlap = max(overlaps) if overlaps else 0.0
-        avg_overlap = sum(overlaps) / len(overlaps) if overlaps else 0.0
-
-        # ── 2. 漂移检查（Drift Constraint）：新证据是否偏离锚点定义 ──
-        drift_score = 1.0 - _keyword_overlap(new_content, anchor.description or anchor.name)
-
-        # ── 4. 重复检测：新证据与已有证据相似度 > 0.7 → 近似重复，建议合并 ──
-        duplicate_of = None
-        for old_content in old_contents:
-            if _keyword_overlap(new_content, old_content) > 0.7:
-                duplicate_of = old_content[:60]
-                break
-
-        if duplicate_of:
-            return {
-                "action": "MERGE",
-                "score": 0.0,
-                "reasons": [f"与已有证据近似重复: '{duplicate_of}...'"],
-                "details": {
-                    "max_overlap": round(max_overlap, 3),
-                    "avg_overlap": round(avg_overlap, 3),
-                    "drift_score": round(drift_score, 3),
-                    "existing_evidence_count": len(evs),
-                    "duplicate_of": duplicate_of,
-                }
-            }
-
-        # ── 综合风险评分 ──
-        risk_score = 0.0
-        reasons = []
-
-        # 低重叠 → 高回顾性衰退风险
-        if max_overlap < 0.1:
-            risk_score += 0.5
-            reasons.append(f"回顾性风险: 与现有证据最大重叠{max_overlap:.2f}，可能侵蚀")
-        elif max_overlap < 0.3:
-            risk_score += 0.25
-            reasons.append(f"回顾性风险: 中等重叠{max_overlap:.2f}，建议验证")
-
-        if drift_score > 0.7:
-            risk_score += 0.3
-            reasons.append(f"漂移风险: 与锚点方向偏离概率{drift_score:.2f}")
-        elif drift_score > 0.4:
-            risk_score += 0.1
-            reasons.append(f"漂移风险: 轻微偏离{drift_score:.2f}")
-
-        # 证据量越多 → 保护应该越强（CPE的"旧能力权重递增"思想）
-        protection_weight = min(len(evs) / 10, 1.0)
-        risk_score = risk_score * (1.0 + protection_weight)  # 证据越多风险越敏感
-        risk_score = min(risk_score, 1.0)
-
-        # ── 判定 ──
-        if risk_score > 0.7:
-            action = "BLOCK"
-        elif risk_score > 0.4:
-            action = "FLAG"
-        else:
-            action = "PASS"
-
-        return {
-            "action": action,
-            "score": round(risk_score, 3),
-            "reasons": reasons,
-            "details": {
-                "max_overlap": round(max_overlap, 3),
-                "avg_overlap": round(avg_overlap, 3),
-                "drift_score": round(drift_score, 3),
-                "protection_weight": round(protection_weight, 3),
-                "existing_evidence_count": len(evs),
-            }
-        }
-
-    def scan_erosion(self) -> List[Dict[str, Any]]:
-        """扫描全工作区，检测能力侵蚀信号（CPE §2.2 Capability Erosion）
-
-        对标 CPE 三大表现：
-        - 回顾性衰退: value_score 连续两次衰减
-        - 策略漂移: 锚点近期的 stability 波动超过阈值
-        - 泛化崩塌: 同锚点证据之间的一致性持续下降
-        """
-        warnings = []
-        for a in self.state.anchors:
-            evs = sorted(
-                [e for e in self.state.evidences if e.anchor_id == a.id],
-                key=lambda x: x.timestamp
-            )
-            if len(evs) < 2:
-                continue
-
-            # 回顾性衰退：最新 vs 次新 value_score
-            a.decay_value(evidence_count=len(evs))
-            new_score = a.value_score
-            a.decay_value(evidence_count=len(evs) - 1)
-            old_score = a.value_score
-            if old_score > new_score and (old_score - new_score) > 0.1:
-                warnings.append({
-                    "type": "retrospective_decay",
-                    "anchor": a.name,
-                    "severity": "medium",
-                    "detail": f"value_score {old_score:.2f}→{new_score:.2f} (Δ={old_score - new_score:.2f})",
-                })
-
-            # 策略漂移：stability 突变
-            old_strength = a.recalc_strength(len(evs) - 1)
-            new_strength = a.recalc_strength(len(evs))
-            drift = abs(new_strength - old_strength)
-            if drift > 0.15:
-                warnings.append({
-                    "type": "behavioral_drift",
-                    "anchor": a.name,
-                    "severity": "medium",
-                    "detail": f"stability {old_strength:.2f}→{new_strength:.2f} (Δ={drift:.2f})",
-                })
-
-            # 泛化崩塌：证据间平均重叠度
-            content_pairs = []
-            for i in range(len(evs)):
-                for j in range(i + 1, len(evs)):
-                    if evs[i].content and evs[j].content:
-                        content_pairs.append(
-                            _keyword_overlap(evs[i].content, evs[j].content)
-                        )
-            if content_pairs:
-                avg_consistency = sum(content_pairs) / len(content_pairs)
-                if avg_consistency < 0.2 and len(evs) >= 3:
-                    warnings.append({
-                        "type": "generalization_erosion",
-                        "anchor": a.name,
-                        "severity": "high",
-                        "detail": f"证据间平均重叠度{avg_consistency:.2f} (<0.2, {len(evs)}条证据)",
-                    })
-
-        self.state.cpe_erosion_warnings = warnings
-        return warnings
-
-    def coalesce(self, anchor_name: str, threshold: float = 0.7) -> Dict[str, Any]:
-        """模糊去重合并：同锚点下相似度 > threshold 的证据自动合并
-
-        合并策略：
-          1. 遍历同锚点所有证据，两两计算 _keyword_overlap
-          2. 重叠度 > threshold → 保留较长的那条，标记较短的那条废弃
-          3. 返回合并统计
-
-        这是 CPE 泛化防线的主动修复动作——检测到 erosion 后调用。
-        """
-        anchor = next((a for a in self.state.anchors if a.name == anchor_name), None)
-        if not anchor:
-            return {"status": "error", "message": f"锚点 '{anchor_name}' 不存在"}
-
-        evs = [e for e in self.state.evidences if e.anchor_id == anchor.id]
-        if len(evs) < 2:
-            return {"status": "skip", "message": "证据不足2条，无需合并", "removed": 0}
-
-        # 按时间戳排序（旧→新）
-        evs_sorted = sorted(evs, key=lambda x: x.timestamp)
-        to_remove: set[str] = set()
-        merged = 0
-
-        for i in range(len(evs_sorted)):
-            if evs_sorted[i].id in to_remove:
-                continue
-            for j in range(i + 1, len(evs_sorted)):
-                if evs_sorted[j].id in to_remove:
-                    continue
-                overlap = _keyword_overlap(evs_sorted[i].content, evs_sorted[j].content)
-                if overlap > threshold:
-                    # 保留较长的，移除较短的
-                    if len(evs_sorted[i].content) >= len(evs_sorted[j].content):
-                        to_remove.add(evs_sorted[j].id)
-                    else:
-                        to_remove.add(evs_sorted[i].id)
-                        break
-                    merged += 1
-
-        self.state.evidences = [e for e in self.state.evidences if e.id not in to_remove]
-        self.state.cpe_regularization_count += 1
-
-        return {
-            "status": "ok",
-            "anchor": anchor_name,
-            "threshold": threshold,
-            "removed": len(to_remove),
-            "merged_pairs": merged,
-            "remaining": len(evs) - len(to_remove),
-        }
-
-    def regularize(self, anchor_name: str, content: str, force: bool = False) -> Dict[str, Any]:
-        """对单条证据执行 CPE 正则化检查（对外接口）
-
-        force=True 时跳过 BLOCK，仅做 FLAG 标记
-        """
-        s = self.state
-        anchor = next((a for a in s.anchors if a.name == anchor_name), None)
-        if not anchor:
-            return {"action": "PASS", "reason": "锚点不存在，不拦截"}
-
-        result = self.evaluate_new_evidence(anchor, content)
-        action = result["action"]
-        if force and action == "BLOCK":
-            action = "FLAG"
-
-        if action == "PASS":
-            # 已通过的证据ID会在外部添加后追加到 regularized_evidences
-            pass
-        elif action == "BLOCK":
-            s.blocked_evidences.append(f"{anchor_name}:{content[:40]}")
-            s.cpe_regularization_count += 1
-        elif action == "FLAG":
-            s.blocked_evidences.append(f"FLAG:{anchor_name}:{content[:40]}")
-            s.cpe_regularization_count += 1
-
-        # 保存扫描结果
-        self.scan_erosion()
-        return result
 
 
 # ==============================================================================
@@ -1508,331 +1190,20 @@ class CPERegularizer:
 # 融合点：利用液环现有锚点体系做探测QA验证 + 证据锚定修复
 # ==============================================================================
 
-def _tokenize(text: str) -> List[str]:
-    """关键词分词（零依赖替代 sentence-transformers）
-
-    混合策略：英文按单词分，中文逐字分。
-    例: "飞哥液环认知" → ['飞','哥','液','环','认','知']
-         "hello world" → ['hello','world']
-    """
-    tokens = []
-    i = 0
-    text = text.lower()
-    while i < len(text):
-        c = text[i]
-        # 中文字符 → 逐字
-        if '\u4e00' <= c <= '\u9fff':
-            tokens.append(c)
-            i += 1
-        # 英文/数字 → 连续词
-        elif c.isalnum():
-            j = i
-            while j < len(text) and text[j].isalnum():
-                j += 1
-            word = text[i:j]
-            if len(word) > 1:
-                tokens.append(word)
-            i = j
-        else:
-            i += 1
-    return tokens
 
 
-def _keyword_overlap(a: str, b: str, cache: dict | None = None) -> float:
-    """关键词重叠度（Jaccard 系数），支持缓存"""
-    if not a or not b:
-        return 0.0
-    if cache is not None:
-        import hashlib
-        h1, h2 = hashlib.md5(a.encode()).hexdigest()[:8], hashlib.md5(b.encode()).hexdigest()[:8]
-        key = f"{min(h1,h2)}:{max(h1,h2)}"  # str key，JSON 兼容
-        if key in cache:
-            return cache[key]
-    import re
-    tokens1 = set(re.findall(r"[一-鿿]|[a-zA-Z0-9]+", a.lower()))
-    tokens2 = set(re.findall(r"[一-鿿]|[a-zA-Z0-9]+", b.lower()))
-    if not tokens1 or not tokens2:
-        return 0.0
-    result = len(tokens1 & tokens2) / len(tokens1 | tokens2)
-    if cache is not None:
-        cache[key] = result
-    return result
 
 
-def _judge_answer(gold: str, answer: str) -> bool:
-    """简单判定答案是否正确（关键词命中）"""
-    if not gold or not answer:
-        return False
-    gold_lower = gold.lower()
-    answer_lower = answer.lower()
-    if gold_lower in answer_lower or answer_lower in gold_lower:
-        return True
-    gold_kw = set(_tokenize(gold))
-    answer_kw = set(_tokenize(answer))
-    if not gold_kw:
-        return False
-    hit = len(gold_kw & answer_kw) / len(gold_kw)
-    return hit >= 0.3
 
 
-class SelfRefineEngine:
-    """液环后向自进化引擎。借鉴 MemMA 原位自进化三步法。"""
-
-    def __init__(self, state: WorkspaceState):
-        self.state = state
-
-    def generate_probes(self, evidence_ids: List[str] = None) -> List[Dict[str, Any]]:
-        """从证据中生成差异化的探测QA对。
-
-        MemMA融合：每个证据生成唯一的问题（通过截取前半段做问，后半段做答），
-        确保 verify 能通过关键词匹配找到正确答案。
-        """
-        evidences = self.state.evidences
-        if evidence_ids:
-            evidences = [e for e in evidences if e.id in evidence_ids]
-        if not evidences:
-            return []
-        probes = []
-        for e in evidences:
-            if not e.content:
-                continue
-            anchor_name = next((a.name for a in self.state.anchors if a.id == e.anchor_id), "未知锚点")
-            # 差异化策略：从证据内容中提取关键词做问题
-            words = _tokenize(e.content)
-            kw_question = " ".join(words[:5]) if words else ""
-            if len(kw_question) > 10:
-                probes.append({
-                    "type": "fact",
-                    "question": f"关于{anchor_name}，{kw_question}是什么？",
-                    "answer": e.content,
-                    "source_id": e.id,
-                })
-            else:
-                probes.append({
-                    "type": "fact",
-                    "question": f"关于{anchor_name}有什么已知信息？",
-                    "answer": e.content,
-                    "source_id": e.id,
-                })
-        for rel in self.state.relations:
-            src = next((a for a in self.state.anchors if a.id == rel.source_id), None)
-            tgt = next((a for a in self.state.anchors if a.id == rel.target_id), None)
-            if src and tgt:
-                probes.append({
-                    "type": "relation",
-                    "question": f"{src.name}和{tgt.name}之间有什么{rel.relation_type}关系？",
-                    "answer": f"{src.name} {rel.relation_type} {tgt.name}",
-                    "source_id": f"rel:{rel.source_id}->{rel.target_id}",
-                })
-        for a in self.state.anchors:
-            evs = [e for e in evidences if e.anchor_id == a.id]
-            if evs:
-                probes.append({
-                    "type": "overview",
-                    "question": f"锚点{a.name}有哪些证据？",
-                    "answer": "; ".join(e.content for e in evs[:3]),
-                    "source_id": a.id,
-                })
-        return probes
-
-    def verify(self, probe: Dict[str, Any]) -> Dict[str, Any]:
-        """验证单条探测：用关键词检索模拟回忆。"""
-        question = probe.get("question", "")
-        gold = probe.get("answer", "")
-        source_id = probe.get("source_id", "")
-        if not question:
-            return {"passed": True, "reason": "empty probe"}
-
-        # 候选集：所有锚点描述+名称 + 所有证据内容 + 探针自身答案
-        candidates = []
-        for a in self.state.anchors:
-            candidates.append(a.description)
-            candidates.append(a.name)
-        for e in self.state.evidences:
-            candidates.append(e.content)
-        if gold:
-            candidates.append(gold)  # 自身答案作为候选（防止问"有哪些证据"时自己找不到自己）
-
-        scored = [(c, _keyword_overlap(question, c)) for c in candidates if c]
-        scored.sort(key=lambda x: x[1], reverse=True)
-        retrieved = [c for c, _ in scored[:5] if _ > 0]
-
-        if not retrieved:
-            return {"passed": False, "question": question, "gold": gold, "source": source_id, "retrieved": [], "reason": "检索失败，无相关记忆"}
-
-        answer = " ".join(retrieved)
-        passed = _judge_answer(gold, answer)
-        return {
-            "passed": passed,
-            "question": question,
-            "gold": gold,
-            "source": source_id,
-            "retrieved": retrieved[:3],
-            "reason": "通过" if passed else f"关键词不匹配，gold={gold[:40]}",
-        }
-
-    def repair(self, failures: List[Dict[str, Any]]) -> List[str]:
-        """对失败的探测执行修复操作：新增Evidence。
-
-        修复策略：
-        - overview类型失败不修复（问"有哪些证据"时关键词匹配天然偏低，数据已存在）
-        - 关系探测失败不修复（关系不能通过追加证据修复）
-        - source 是锚点ID → 直接追加到该锚点
-        - source 是证据ID → 追加到该证据所属锚点
-        - 无 source → 用关键词匹配找最佳锚点或创建新锚点
-        """
-        if not failures:
-            return []
-        repairs = []
-        for f in failures:
-            gold = f.get("gold", "")
-            source = f.get("source", "")
-            if not gold:
-                continue
-
-            # 跳过不可修复的探测类型
-            if source and str(source).startswith("rel:"):
-                continue
-
-            # 确定目标锚点
-            target_anchor = None
-            if source:
-                target_anchor = next((a for a in self.state.anchors if a.id == source), None)
-                if not target_anchor:
-                    ev = next((e for e in self.state.evidences if e.id == source), None)
-                    if ev:
-                        target_anchor = next((a for a in self.state.anchors if a.id == ev.anchor_id), None)
-
-            if not target_anchor:
-                candidates = [(a, _keyword_overlap(gold, a.description + " " + a.name))
-                              for a in self.state.anchors]
-                candidates = [(a, s) for a, s in candidates if s > 0.1]
-                if candidates:
-                    target_anchor = max(candidates, key=lambda x: x[1])[0]
-                else:
-                    new_name = gold.split("是")[0].strip()[:20] if "是" in gold else gold[:20]
-                    target_anchor = Anchor(name=new_name, description=gold[:50])
-                    self.state.anchors.append(target_anchor)
-                    repairs.append(f"CREATE: 新建锚点[{new_name}]: {gold[:40]}")
-
-            if target_anchor:
-                existing = [e for e in self.state.evidences
-                            if e.anchor_id == target_anchor.id
-                            and _keyword_overlap(gold, e.content) > 0.5]
-                if not existing:
-                    ev = Evidence(anchor_id=target_anchor.id, content=gold, weight=1.0, quality="strong")
-                    self.state.evidences.append(ev)
-                    target_anchor.evidence_ids.append(ev.id)
-                    ev_count = len([e for e in self.state.evidences if e.anchor_id == target_anchor.id])
-                    target_anchor.auto_classify(ev_count)
-                    repairs.append(f"REPAIR: 为锚点[{target_anchor.name}]新增evidence: {gold[:40]}")
-        return repairs
-
-    # ── SEAL 落地（arXiv:2605.24426 失败诊断双优化）──
-    def diagnose(self, failure: Dict[str, Any]) -> Dict[str, Any]:
-        """SEAL 诊断：失败探测归因到锚点，判定失败类型。
-
-        fail_type:
-          retrieval  召回失败（记忆存在但未检索到）→ 策略侧 boost_stability
-          reason     推理失败（检索到但判断不中）   → 策略侧 downweight_noise
-        """
-        reason = failure.get("reason", "")
-        if "检索" in reason or "无相关" in reason:
-            fail_type = "retrieval"
-        else:
-            fail_type = "reason"
-        source = failure.get("source", "")
-        target = None
-        if source:
-            target = next((a for a in self.state.anchors if a.id == source), None)
-            if not target:
-                ev = next((e for e in self.state.evidences if e.id == source), None)
-                if ev:
-                    target = next((a for a in self.state.anchors if a.id == ev.anchor_id), None)
-        if fail_type == "retrieval":
-            tune = "boost_stability"
-            root = "召回失败：记忆存在但未检索到（权重/描述召回不足）"
-        else:
-            tune = "downweight_noise"
-            root = "推理失败：检索到但关键词判断不中（噪声/描述歧义）"
-        return {"fail_type": fail_type, "target_anchor": target.id if target else None,
-                "root_cause": root, "tune": tune}
-
-    def apply_strategy(self, diag: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """SEAL 双优化 - 策略侧：修复确认→boost_stability；噪声→downweight。"""
-        if not diag.get("target_anchor"):
-            return []
-        a = next((x for x in self.state.anchors if x.id == diag["target_anchor"]), None)
-        if not a:
-            return []
-        if diag["tune"] == "boost_stability":
-            a.seal_adjust = min(0.5, round(a.seal_adjust + 0.1, 3))
-        else:
-            a.seal_adjust = max(-0.5, round(a.seal_adjust - 0.1, 3))
-        base = getattr(a, "base_stability", a.stability)
-        projected = round(min(1.0, max(0.1, base + a.seal_adjust)), 3)
-        return [{"op": diag["tune"], "anchor": a.name, "seal_adjust": a.seal_adjust, "projected_stability": projected}]
-
-    def run(self, evidence_ids: List[str] = None) -> Dict[str, Any]:
-        """执行完整后向自进化周期。"""
-        probes = self.generate_probes(evidence_ids)
-        if not probes:
-            return {"total": 0, "passed": 0, "failed": 0, "repairs": [], "message": "无证据可探测"}
-        results = [self.verify(p) for p in probes]
-        passed = sum(1 for r in results if r.get("passed"))
-        # 只对 fact 和 relation 类型失败的做修复，overview 失败不修
-        failures = [r for p, r in zip(probes, results)
-                    if not r.get("passed") and p.get("type") != "overview"]
-        repairs = self.repair(failures)
-        # SEAL 双优化 - 策略侧：诊断失败 → 调锚点 stability
-        diagnoses = [self.diagnose(f) for f in failures]
-        strategy_actions = []
-        for d in diagnoses:
-            strategy_actions.extend(self.apply_strategy(d))
-        self.state.self_refine_probes = probes
-        self.state.self_refine_results = results
-        self.state.self_refine_repair_count += len(repairs)
-        return {"total": len(probes), "passed": passed, "failed": len(failures), "pass_rate": round(passed / len(probes), 2), "repairs": repairs, "diagnoses": diagnoses, "strategy_actions": strategy_actions, "failed_details": [{"q": r.get("question", "")[:60], "reason": r.get("reason", "")} for r in failures[:5]]}
 
 
 # ==============================================================================
 # MetaThinker — 前向策略层（借鉴 MemMA Meta-Thinker，零LLM方案）
 # ==============================================================================
 
-def meta_thinker_evaluate(state: WorkspaceState) -> Dict[str, Any]:
-    """评估当前工作区策略健康度。"""
-    issues = []
-    orphan_anchors = [a for a in state.anchors if not a.evidence_ids]
-    if orphan_anchors:
-        issues.append({"severity": "warning", "issue": f"{len(orphan_anchors)}个锚点无证据", "anchors": [a.name for a in orphan_anchors]})
-    conflict_rels = [r for r in state.relations if r.relation_type == "conflicts_with"]
-    if conflict_rels:
-        issues.append({"severity": "error", "issue": f"{len(conflict_rels)}条冲突关系未解决"})
-    from .entropy import calculate
-    ent = calculate(state)
-    if ent > 0.6:
-        issues.append({"severity": "error", "issue": f"熵值过高({ent:.2f})，认知结构不稳定"})
-    return {"healthy": len([i for i in issues if i["severity"] == "error"]) == 0, "issues": issues, "entropy": ent}
 
 
-def meta_thinker_advice(anchor: Anchor, state: WorkspaceState, new_evidence: str) -> Dict[str, Any]:
-    """零LLM策略检查：评估新证据与现有记忆的关系。"""
-    existing = [e.content for e in state.evidences if e.anchor_id == anchor.id]
-    if not existing:
-        return {"action": "ADD", "reason": "锚点无现有证据，直接添加"}
-    best_score, best_ev = 0, None
-    for content in existing:
-        score = _keyword_overlap(new_evidence, content)
-        if score > best_score:
-            best_score, best_ev = score, content
-    if best_score > 0.6:
-        return {"action": "UPDATE", "reason": f"与现有证据高度重叠(overlap={best_score:.2f})，建议合并", "suggestion": f"现有: {best_ev[:40]}..."}
-    elif best_score > 0.3:
-        return {"action": "ADD", "reason": f"部分相关(overlap={best_score:.2f})，添加为补充证据"}
-    elif best_score > 0:
-        return {"action": "ADD", "reason": f"弱相关(overlap={best_score:.2f})，添加但标记为low value"}
-    else:
-        return {"action": "SKIP", "reason": "与当前锚点无关联"}
 
 
 # ==============================================================================
