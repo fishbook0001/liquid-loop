@@ -62,3 +62,92 @@ def confirm_gate(action: str, risk: str = "high", auto_approve: bool = False) ->
     if risk == "high" and not auto_approve:
         return False
     return True
+
+
+class PerceptionGate:
+    """门控-液环因果共生环的胶水层（“单终端机器人”概念落地件）。
+
+    设计定位（克制原则：精选 4 模块，不重新膨胀）：
+      - 输入候选感知动作 + 预算余量 + 灵敏度，输出 allow / degrade / block + 理由。
+      - 内部消费：
+          1) guard.should_escalate —— 不可逆变 + 低置信 → 交回人（block）。
+          2) 因果边（workspace.causal：enables/causes/contradicts）→ 「因果核心永饿死」
+             豁免：命中因果核心的动作即便超预算也放行，保证液环主链路不被闸饿死。
+          3) adaptive_recall 的负载双模（load<0.5 冗余验证 / ≥0.5 分工扩容）→
+             超预算时按当前认知负载决定 degrade（省算力）还是 allow（精度优先）。
+          4) build_or_cache（rar 本地索引缓存）→ 本地算力溶解「重建索引」成本，
+             使高载降级 skip 无后顾之忧（详见测试 test_perception_gate.py）。
+
+    零依赖：真实因果边 / 负载来自 liquid-loop 的 workspace / recall_filter / rar，
+    由 adapter 注入（causal_core_predicate / load_probe），不在本模块 import 重型依赖。
+    这样门控成为「可配置策略」，而非把整套液环塞进门里的膨胀方案。
+    """
+
+    def __init__(self, budget: float = 1.0, sensitivity: str = "normal",
+                 causal_core_predicate=None, load_probe=None):
+        self.budget = float(budget)
+        self.sensitivity = sensitivity
+        self._spent = 0.0
+        # 默认谓词：无注入时一律非因果核心（保守，闸正常生效）
+        self.causal_core_predicate = causal_core_predicate or (lambda action: False)
+        # 默认负载探测器：无注入时返回 0.0（低载，精度优先路径）
+        self.load_probe = load_probe or (lambda: 0.0)
+
+    def decide(self, action, cost: float = 0.0, confidence: float = 1.0,
+               irreversible: bool = False) -> dict:
+        """对一条候选感知动作做门控裁决。
+
+        返回 dict: {"decision": allow|degrade|block, "reason": str, ...}
+          - block    : 需人工确认（交回人），不消耗预算。
+          - allow    : 放行（因果核心豁免 / 正常 / 低载精度优先）。
+          - degrade  : 超预算 + 高载 → 降采样 / 跳过，省算力；不消耗预算。
+        """
+        # 1) 不可逆变 + 低置信 → 交回人（should_escalate 红线）
+        if should_escalate(confidence=confidence, irreversible=irreversible):
+            return {
+                "decision": "block",
+                "reason": "irreversible+low_confidence→需人工确认",
+                "escalate": True,
+            }
+
+        # 2) 因果核心 → 永放行（never starve causal core）
+        if self.causal_core_predicate(action):
+            return {
+                "decision": "allow",
+                "reason": "因果核心动作永放行（保护液环主链路）",
+                "causal_core": True,
+            }
+
+        # 3) 预算检查
+        remaining = self.budget - self._spent
+        if cost > remaining:
+            load = float(self.load_probe())
+            if load >= 0.5:
+                # 高载：降级 skip / 降采样，省算力
+                # （rar.build_or_cache 已本地化索引重建成本，skip 无后顾之忧）
+                return {
+                    "decision": "degrade",
+                    "reason": f"超预算+高载({load:.2f})→降采样/跳过省算力",
+                    "load": load,
+                    "over_budget": True,
+                }
+            # 低载：冗余验证，精度优先（仍消耗预算）
+            self._spent += cost
+            return {
+                "decision": "allow",
+                "reason": f"超预算+低载({load:.2f})→冗余验证精度优先",
+                "load": load,
+                "over_budget": True,
+            }
+
+        # 4) 正常放行
+        self._spent += cost
+        return {
+            "decision": "allow",
+            "reason": "正常放行",
+            "load": float(self.load_probe()),
+        }
+
+    def remaining(self) -> float:
+        """剩余预算。"""
+        return self.budget - self._spent
