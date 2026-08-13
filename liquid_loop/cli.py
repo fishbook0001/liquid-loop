@@ -526,6 +526,18 @@ def version():
     click.echo(f"liquid-loop {__version__}")
 
 
+@main.command()
+def prune():
+    """回收过期临时记忆（蒸馏 #202·TTL 生命周期）"""
+    s = _load()
+    evicted = s.evict_expired()
+    if evicted:
+        _save(s)
+        click.echo(f"✓ 回收 {evicted} 条过期临时记忆")
+    else:
+        click.echo("无过期临时记忆可回收。")
+
+
 if __name__ == "__main__":
     main()
 

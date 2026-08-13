@@ -62,6 +62,7 @@ def save(state: WorkspaceState, workspace_root: Path):
     )
     state.audit_prev_hash = state.audit_chain_hash
     state.audit_chain_hash = audit_hash
+    state.evict_expired()  # 蒸馏 #202：落盘前回收过期临时记忆（集中清理点，向后兼容）
     data = asdict(state)
     # overlap_cache 仅为运行时熵计算缓存，键为 tuple，不可 JSON 序列化，且不具持久价值
     data.pop("overlap_cache", None)

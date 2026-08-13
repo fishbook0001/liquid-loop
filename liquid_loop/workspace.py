@@ -245,6 +245,9 @@ class Memory:
     principle_grounded: bool = False  # True=由共享 principle 的证据结晶（why 先于 how 的首类核心）
     attn_bonus: float = 0.0  # #115 注意力增益：被反复召回证据的 support 加成（仅增 s，不削 c，守反证轨）
     replay_pressure: float = 0.0  # #116 重放压力感知：over-replay 的 contradiction 累计超额召回次数（≥0）
+    # ── 蒸馏 #202 记忆外置·分级存储 + 生命周期(TTL) ──
+    tier: str = "fact"  # 记忆分级: fact(事实)/preference(偏好)/temp(临时)。temp 可被 TTL 回收
+    expires_at: str = ""  # ISO 时间戳；非空且已过期 → evict_expired 回收（仅 temp）。空=永不过期
 
 
 @dataclass
@@ -311,6 +314,34 @@ class WorkspaceState:
     overlap_cache: dict = field(default_factory=dict)  # 缓存关键词重叠度
     _iteration: int = 0  # 有效状态更新次数（τ = Effective Iteration）；时间动力学以之为时间变量而非墙钟
     canon_fn: object = None  # 可替换 Projection Layer（Layer-1 修复）：注入后冲突检测复用此投影，None=旧关键词重叠回退
+
+    # ── 蒸馏 #202 记忆外置·生命周期(TTL) 回收 ──
+    def evict_expired(self, ref_dt=None) -> int:
+        """按 TTL 回收过期临时记忆（记忆外置四项挑战之'可靠删除'）。
+
+        仅清理 tier='temp' 且 expires_at 已过期的 Memory；
+        锚点/证据不受影响（证据不可删，符合反证轨不可篡改性）。
+        返回回收条数。向后兼容：无 expires_at 的 Memory 永不过期。
+        """
+        if not self.memories:
+            return 0
+        from datetime import datetime, timezone
+        ref = ref_dt or datetime.now(timezone.utc)
+        kept, evicted = [], 0
+        for m in self.memories:
+            if m.tier == "temp" and m.expires_at:
+                try:
+                    exp = datetime.fromisoformat(m.expires_at)
+                    if exp.tzinfo is None:
+                        exp = exp.replace(tzinfo=timezone.utc)
+                    if exp <= ref:
+                        evicted += 1
+                        continue
+                except ValueError:
+                    pass
+            kept.append(m)
+        self.memories = kept
+        return evicted
 
     # ── API 层：add_anchor / add_evidence（让 README 示例能跑通）──
 

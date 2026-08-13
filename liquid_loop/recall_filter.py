@@ -124,3 +124,59 @@ def recall_content_filter(query: str, candidates: list, theta: float = 0.0,
     rep = {"enabled": True, "theta": theta, "n_in": len(candidates),
            "n_out": len(kept), "suppressed": suppressed}
     return kept, rep
+
+
+def adaptive_recall(query: str, candidates: list, load: float = 0.3,
+                    k: int = 5, redundancy: int = 3) -> tuple:
+    """蒸馏 #203 自适应 RAID 路由：低载冗余交叉验证 ↔ 高载分工扩容量。
+
+    低认知负载(load<0.5)：多路冗余交叉验证——用 jaccard/content_aware/containment
+        三路打分聚合取共识，抑制单边噪声，提升精度（容错、抗噪）。
+    高负载(load>=0.5)：弱耦合分工——单路快排 top-k，省算力扩容量（不做交叉验证）。
+
+    query      — 查询串
+    candidates — 候选 dict 列表（需含 "content"，可选 "score"）
+    load       — 当前认知负载 0~1（越高越走分工路径）
+    k          — 返回条数
+    redundancy — 低载时冗余路数（用于多数投票分母）
+    返回 (结果列表, report)。fail-open：异常由 caller 兜底（返回原候选 top-k）。
+    """
+    if not candidates:
+        return [], {"mode": "empty", "load": load}
+    try:
+        if load < 0.5:
+            # ── 低载：冗余交叉验证（多路打分→共识）──
+            q_set = set(_tokens(query))
+            q_vec = _vec(query)
+            scored = []
+            for r in candidates:
+                content = r.get("content", "") or ""
+                c_set = set(_tokens(content))
+                c_vec = _vec(content)
+                jac = _jaccard_sets(q_set, c_set)
+                cont = max(_containment_sets(q_set, c_set),
+                           _containment_sets(c_set, q_set))
+                caw = cosine_dict(c_vec, q_vec)
+                votes = sum(1 for s in (jac, cont, caw) if s >= 0.1)  # 三路弱相关投票
+                consensus = votes / float(redundancy) if redundancy else 0.0
+                base = float(r.get("score", 0.0))
+                fused = 0.6 * base + 0.4 * consensus  # 主 score 与共识加权
+                new_r = dict(r)
+                new_r["raid_consensus"] = round(consensus, 4)
+                new_r["raid_fused"] = round(fused, 4)
+                new_r["raid_votes"] = votes
+                scored.append(new_r)
+            scored.sort(key=lambda x: x["raid_fused"], reverse=True)
+            mode = "redundant_verify"
+        else:
+            # ── 高载：分工扩容量（单路快排，不交叉验证）──
+            scored = sorted(candidates, key=lambda x: float(x.get("score", 0.0)),
+                            reverse=True)
+            mode = "specialized_capacity"
+        return scored[:k], {"mode": mode, "load": load,
+                            "n_in": len(candidates), "n_out": min(k, len(scored))}
+    except Exception:
+        # fail-open：退回原样 top-k，不抛异常阻断 caller
+        return sorted(candidates, key=lambda x: float(x.get("score", 0.0)),
+                      reverse=True)[:k], {"mode": "fail_open", "load": load}
+
