@@ -8,6 +8,7 @@ from .textutil import (
 from .audit import AuditChain
 from .cpe import CPERegularizer
 from .self_refine import SelfRefineEngine, meta_thinker_evaluate, meta_thinker_advice
+from .guard import validate_content
 
 
 from dataclasses import dataclass, field
@@ -315,6 +316,11 @@ class WorkspaceState:
                 target = next((a for a in self.anchors if a.id == anchor), None)
         if not target:
             return None
+        # 08-18 工程化修复：内容质量 ValidationRule 下沉库层（堵直调绕过通道）。
+        # 与 server ll_remember 共用 guard.validate_content，单点维护。
+        v_err = validate_content(content)
+        if v_err:
+            raise ValueError(v_err)
         # 幂等去重（仅当 dedup=True）：同锚点+同内容+同 agent 已存在则复用
         if dedup:
             for ex in self.evidences:
@@ -506,6 +512,18 @@ class WorkspaceState:
 
         group = [e for e in self.evidences if e.anchor_id == anchor_id]
         if len(group) < 2:
+            # 08-18 工程化修复：锚点证据已不足 → 清除历史冲突残留（防 stale conflict 累积）
+            self.conflicts = [c for c in self.conflicts if c.anchor_a != anchor_id]
+            return
+        # ── 聚合型锚点豁免（2026-08-17 审计修复）────────────────────────
+        # distill/research_asset/principle 等锚点设计上聚合多主题资产，
+        # keyword-overlap 平均一致度天然偏低，会系统性误报冲突/漂移。
+        _agg_anchor = next((a for a in self.anchors if a.id == anchor_id), None)
+        if _agg_anchor and _agg_anchor.name in {
+            "distill", "research_asset", "tool_ref", "principle",
+            "harness-factor", "pattern", "metacontrol_flag", "pending_action",
+        }:
+            self.conflicts = [c for c in self.conflicts if c.anchor_a != anchor_id]
             return
         distinct: list = []
         seen: set = set()
@@ -517,6 +535,8 @@ class WorkspaceState:
         # ── 回退路径：未注入 Projection Layer -> 旧关键词重叠行为（向后兼容）──
         if self.canon_fn is None:
             if len(distinct) < 2:
+                # 08-18 工程化修复：去重后样本不足 → 清除历史冲突残留
+                self.conflicts = [c for c in self.conflicts if c.anchor_a != anchor_id]
                 return
             overlaps = []
             for i in range(len(distinct)):

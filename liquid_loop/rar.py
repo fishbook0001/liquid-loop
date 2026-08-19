@@ -318,6 +318,8 @@ class RARIndex:
         for e in state.evidences:
             if agent_id and e.agent_id != agent_id:
                 continue
+            if getattr(e, "superseded_by", False) or getattr(e, "archived", False):
+                continue  # 08-18 对齐 ll_recall：被取代/归档证据退出召回候选
             cands.append({
                 "id": e.id, "type": "evidence",
                 "category": _category_of(state, e.anchor_id),

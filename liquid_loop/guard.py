@@ -13,6 +13,27 @@ from __future__ import annotations
 RISK_LEVELS = ("low", "medium", "high")
 
 
+def validate_content(content: str) -> str | None:
+    """内容质量 ValidationRule（08-18 审计补盲）：挡无意义/垃圾写入。
+
+    返回拒绝原因字符串；通过返回 None。
+    规则（纯规则零依赖，只挡"无意义"，不评"价值"）：
+      1) 空内容；
+      2) 无字母/汉字 且 过短(<8) 的纯占位/符号噪音（如 "1"、"!"、"!!!"）；
+      3) 字符多样性过低(熵代理)的重复噪音（如 "aaaaaa"、"111111"）。
+    单点维护：server ll_remember 与 workspace.add_evidence 共用本函数。
+    """
+    c = (content or "").strip()
+    if not c:
+        return "content 为空: 疑似无意义写入"
+    has_text = any(not ch.isdigit() and ch.isalnum() for ch in c)
+    if not has_text and len(c) < 8:
+        return "content 无文字内容且过短: 疑似占位噪音"
+    if len(set(c)) / len(c) < 0.2:
+        return "content 字符多样性过低(熵代理): 疑似重复噪音"
+    return None
+
+
 def should_escalate(confidence: float = 1.0, irreversible: bool = False,
                     over_budget: bool = False) -> bool:
     """升级刹车：命中任一红线即交回人。低置信 ∨ 不可逆 ∨ 超预算。

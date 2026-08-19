@@ -27,7 +27,18 @@ class AuditChain:
                         if len(parts) >= 2:
                             self._chain.append(parts[1])
 
+    def _maybe_rotate(self) -> None:
+        """08-18 工程化修复：按大小轮转，防 audit.log 无限增长（轮转为断链点，工程取舍）。"""
+        try:
+            max_bytes = int(os.environ.get("LL_AUDIT_MAX_BYTES", "8388608"))  # 默认 8MB
+            if os.path.exists(self._path) and os.path.getsize(self._path) > max_bytes:
+                os.replace(self._path, self._path + ".1")
+                self._chain = []
+        except (OSError, ValueError):
+            pass  # 轮转失败不影响写
+
     def append(self, event_type: str, data: str) -> str:
+        self._maybe_rotate()
         prev = self._chain[-1] if self._chain else "genesis"
         chain_hash = hashlib.sha256(f"{event_type}:{data}:{prev}".encode()).hexdigest()[:16]
         self._chain.append(chain_hash)

@@ -11,6 +11,7 @@ from .workspace import (
 LIQUID_DIR = ".liquid"
 STATE_FILE = "state.json"
 AUDIT_FILE = "audit.log"
+ARCHIVE_FILE = "archive.jsonl"
 
 
 def _ensure_dir(workspace_root: Path) -> Path:
@@ -40,6 +41,41 @@ def _lock_path(workspace_root: Path) -> Path:
     return _ensure_dir(workspace_root) / "state.lock"
 
 
+def _append_archive(workspace_root: Path, evidences) -> None:
+    """08-18 工程化修复：归档证据追加到 archive.jsonl（历史档案，不参与活跃 load）。
+    幂等：已存在于 archive 的 evidence 跳过（防崩溃窗口重复行）。"""
+    d = _ensure_dir(workspace_root)
+    ids = _archive_id_set(workspace_root)
+    with open(d / ARCHIVE_FILE, "a", encoding="utf-8") as f:
+        for e in evidences:
+            if e.id in ids:
+                continue
+            f.write(json.dumps(asdict(e), ensure_ascii=False) + "\n")
+            ids.add(e.id)
+
+
+_ARCHIVE_IDS: set | None = None  # 进程内缓存，避免每次 save 重读 archive
+
+
+def _archive_id_set(workspace_root: Path) -> set:
+    """archive.jsonl 现有 id 集合（跨进程各自首次读一次，随 append 增量更新）。"""
+    global _ARCHIVE_IDS
+    if _ARCHIVE_IDS is None:
+        s: set = set()
+        p = _ensure_dir(workspace_root) / ARCHIVE_FILE
+        if p.exists():
+            with open(p, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        try:
+                            s.add(json.loads(line)["id"])
+                        except Exception:
+                            pass
+        _ARCHIVE_IDS = s
+    return _ARCHIVE_IDS
+
+
 def load(workspace_root: Path) -> WorkspaceState:
     """纯读取，无锁。并发安全由上层 locked_state 上下文保证。"""
     path = _ensure_dir(workspace_root) / STATE_FILE
@@ -63,6 +99,14 @@ def save(state: WorkspaceState, workspace_root: Path):
     state.audit_prev_hash = state.audit_chain_hash
     state.audit_chain_hash = audit_hash
     state.evict_expired()  # 蒸馏 #202：落盘前回收过期临时记忆（集中清理点，向后兼容）
+    # 08-18 工程化修复：归档压实——archived 证据迁出主 state.json 至 archive.jsonl，
+    # 活跃集只保留非归档证据（缓解全量 load/save 膨胀；recall 侧 A1 已排除 archived）。
+    _active, _archived = [], []
+    for e in state.evidences:
+        (_archived if getattr(e, "archived", False) else _active).append(e)
+    if _archived:
+        _append_archive(workspace_root, _archived)
+        state.evidences = _active
     data = asdict(state)
     # overlap_cache 仅为运行时熵计算缓存，键为 tuple，不可 JSON 序列化，且不具持久价值
     data.pop("overlap_cache", None)
