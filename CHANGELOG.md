@@ -1,6 +1,21 @@
 # Changelog
 
-## v1.8.4 (2026-08-12) — 程序性记忆层（D3 + 调研蒸馏：PlugMem/Skill1/EvoC2F/RE-TRAC）
+## v1.9.0 (2026-08-19) — PerceptionGate 因果共生门控 + 工程化修复（v1.8.4→v1.9.0）
+
+- **PerceptionGate 门控-液环因果共生环胶水层**（5174dec，对应蒸馏 gate_liquid_causal_symbiosis_distill）：
+  - 整合 `should_escalate(block)` + workspace.causal 因果核心永饿死豁免 + `adaptive_recall` 负载双模(degrade/allow) + rar 本地算力溶解重建成本。
+  - 零依赖核心，真实模块经 `causal_core_predicate`/`load_probe` 注入；`tests/test_perception_gate.py` 7 测试全绿（真实调用 workspace.causal/adaptive_recall/build_or_cache，不 mock）。
+- **workspace 巨型模块拆解**（f462e12）：1850→1209 行，破环依赖，诊断分类 14→2。
+- **4 蒸馏守卫落地**（006a3e2）：#202 分级 TTL / #203 自适应 recall / #199 会话 abort / #197+#198 守卫，解熵环。
+- **工程化修复四件**（d136731，08-18/19 审计）：
+  - `guard.validate_content` 内容质量门（空/占位/低熵噪音拦截），server 与 workspace 单点共用；
+  - `audit.log` 按 `LL_AUDIT_MAX_BYTES`(默认 8MB) 轮转防无限增长；
+  - `rar` 召回对齐 `ll_recall`：`superseded_by`/`archived` 证据退出召回候选；
+  - `storage._append_archive` 归档写 `archive.jsonl`（幂等防崩溃重复）；
+  - workspace：内容门下沉重库层 + 锚点证据不足清 stale conflict + 聚合型锚点冲突豁免。
+- 测试 185 passed（+22：PerceptionGate 7 / 蒸馏守卫等）。
+
+## v1.8.4 (2026-08-12) — 程序性记忆层（D3 + 调研蒸馏：PlugMem/Skill1/EvoC2F/RE-TRAC） (2026-08-12) — 程序性记忆层（D3 + 调研蒸馏：PlugMem/Skill1/EvoC2F/RE-TRAC）
 
 - **`procedural_memory.py` 程序性记忆一等公民**（distill_registry 实现）：`ProceduralMemory` + `ProceduralRegistry`，与声明式 Anchor/Evidence/Memory 正交。
   - EvoC2F 三关准入（功能/契约/回归）+ 分阶段部署（pending→shadow→canary→active|rejected）+ 不可逆技能封顶 canary 需人工放行（↔ ops_gate）。
