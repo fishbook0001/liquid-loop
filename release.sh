@@ -1,19 +1,17 @@
 #!/usr/bin/env bash
-# liquid-loop 发布脚本（v2 — 沙箱兼容版）
-# 用法: ./release.sh [patch|minor|major|dry]  # 默认 patch，dry=只构建不发布
+# liquid-loop 发布脚本（v3 — Trusted Publishing 全流程）
+# 用法: ./release.sh [patch|minor|major|dry]  # 默认 patch，dry=只测试构建不发布
 # 前置: cp .release_config.example .release_config && 编辑填入真实值
+# 流程: 测试门禁 → 版本双处同步 → CHANGELOG → commit+tag → push(guard-ok)
+#       → 等 Actions publish → PyPI 验证 → GitHub Release
 
 set -euo pipefail
 
 # ── 沙箱环境检测 ──────────────────────────────────────────
-# macOS 沙箱会拦截 ~/.gitconfig、~/.ssh/known_hosts 等文件访问
-# 通过检测 git 是否报 "Operation not permitted" 来判断
 IS_SANDBOX=false
 if ! git config --global user.name &>/dev/null 2>&1; then
     IS_SANDBOX=true
 fi
-
-# 沙箱模式下覆盖 git/ssh 环境变量
 if $IS_SANDBOX; then
     export GIT_CONFIG=/dev/null
     export GIT_CONFIG_GLOBAL=/dev/null
@@ -24,12 +22,28 @@ fi
 # ── 读取配置 ──────────────────────────────────────────────
 CONFIG=".release_config"
 if [[ ! -f "$CONFIG" ]]; then
-    echo "❌ 缺少 $CONFIG，请先复制 .release_config.example 并填写"
+    echo "❌ 缺少 ${CONFIG}，请先复制 .release_config.example 并填写" >&2
     exit 1
 fi
 source "$CONFIG"
 
-# ── 版本号递增 ──────────────────────────────────────────────
+# ── 测试门禁（发布前质量闸）──────────────────────────────
+PYTEST_PY=""
+for py in "$HOME/.workbuddy/binaries/python/envs/liquidloop062/bin/python3" \
+          /opt/homebrew/bin/python3 /usr/bin/python3; do
+    if [[ -x "$py" ]] && "$py" -c "import pytest" 2>/dev/null; then
+        PYTEST_PY="$py"; break
+    fi
+done
+if [[ -n "$PYTEST_PY" ]]; then
+    echo "🧪 测试门禁 ($PYTEST_PY)..."
+    "$PYTEST_PY" -m pytest -q || { echo "❌ 测试未全绿，中止发布"; exit 1; }
+else
+    echo "⚠️  未找到可用 pytest，跳过测试门禁（建议配置后使用）"
+fi
+echo ""
+
+# ── 版本号递增 ────────────────────────────────────────────
 BUMP="${1:-patch}"
 CURRENT_VERSION=$(grep '^version = ' pyproject.toml | sed 's/version = "\(.*\)"/\1/')
 IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
@@ -41,129 +55,103 @@ case "$BUMP" in
     *)     echo "未知版本类型: $BUMP"; exit 1 ;;
 esac
 [[ "$BUMP" != "dry" ]] && NEW_VERSION="$MAJOR.$MINOR.$PATCH"
-
 echo "🚀 发布 liquid-loop v$NEW_VERSION (当前 v$CURRENT_VERSION)"
 echo ""
 
-# ── 1. 更新版本号（非 dry 模式）────────────────────────────
+# ── 1. 版本号双处同步 ─────────────────────────────────────
 if [[ "$BUMP" != "dry" ]]; then
-    echo "📝 更新版本号 → $NEW_VERSION"
+    echo "📝 同步版本号 → v$NEW_VERSION"
     sed -i.bak "s/^version = \".*\"/version = \"$NEW_VERSION\"/" pyproject.toml
     rm -f pyproject.toml.bak
+    sed -i.bak "s/__version__ = \".*\"/__version__ = \"$NEW_VERSION\"/" liquid_loop/__init__.py
+    rm -f liquid_loop/__init__.py.bak
+    # 头部 docstring 中的 vX.Y.Z 同步（如有）
+    sed -i.bak "s/ v[0-9]\+\.[0-9]\+\.[0-9]\+ / v$NEW_VERSION /" liquid_loop/__init__.py
+    rm -f liquid_loop/__init__.py.bak
 fi
 
 # ── 2. 构建 ──────────────────────────────────────────────
 echo "📦 构建包..."
 rm -rf dist build *.egg-info
-
-# 优先用 Homebrew Python（3.10+），fallback 系统 Python
 BUILD_PYTHON=""
 for py in /opt/homebrew/bin/python3 /usr/bin/python3; do
     if "$py" -c "import build" 2>/dev/null; then
-        BUILD_PYTHON="$py"
-        break
+        BUILD_PYTHON="$py"; break
     fi
 done
 if [[ -z "$BUILD_PYTHON" ]]; then
-    echo "⚠️  build 模块不存在，尝试安装..."
     /opt/homebrew/bin/python3 -m pip install --break-system-packages build 2>/dev/null || \
     /usr/bin/python3 -m pip install build 2>/dev/null || \
     { echo "❌ 无法安装 build 模块"; exit 1; }
     BUILD_PYTHON="/opt/homebrew/bin/python3"
 fi
-echo "   使用: $BUILD_PYTHON"
-"$BUILD_PYTHON" -m build
-echo "   ✅ 构建完成"
+"$BUILD_PYTHON" -m build >/dev/null 2>&1 || { echo "❌ 构建失败"; exit 1; }
+echo "   ✅ 构建完成 (dist/)"
 echo ""
 
-# ── 3. Git 提交与标签（非 dry 模式）────────────────────────
+# ── 3. CHANGELOG 追加 ────────────────────────────────────
+if [[ "$BUMP" != "dry" ]] && [[ -f CHANGELOG.md ]]; then
+    echo "📜 追加 CHANGELOG 段..."
+    NOTES=$(git log "$(git describe --tags --abbrev=0 2>/dev/null || echo HEAD~1)"..HEAD \
+            --oneline 2>/dev/null | sed 's/^/  - /' | head -20 || true)
+    /usr/bin/python3 - "$NEW_VERSION" "$NOTES" << 'PYEOF'
+import sys, datetime
+ver, notes = sys.argv[1], sys.argv[2]
+today = datetime.date.today().isoformat()
+lines = ["", f"## v{ver} ({today}) — 增量发布", ""]
+for ln in notes.splitlines():
+    if ln.strip():
+        lines.append(ln)
+txt = open("CHANGELOG.md").read()
+marker = "# Changelog\n"
+if marker in txt:
+    txt = txt.replace(marker, marker + "\n" + "\n".join(lines) + "\n", 1)
+    open("CHANGELOG.md", "w").write(txt)
+    print("   ✅ CHANGELOG 已插入")
+PYEOF
+fi
+
+# ── 4. Commit + tag（非 dry）──────────────────────────────
 if [[ "$BUMP" != "dry" ]]; then
-    echo "🏷️  创建 Git 标签..."
-    git add pyproject.toml
-    git commit -m "chore: release v$NEW_VERSION"
+    echo "🏷️  Commit + tag v$NEW_VERSION..."
+    git add pyproject.toml liquid_loop/__init__.py CHANGELOG.md
+    git commit -m "chore(release): v$NEW_VERSION"
     git tag -a "v$NEW_VERSION" -m "Release v$NEW_VERSION"
 fi
 
-# ── 4. 推送到 GitHub ──────────────────────────────────────
+# ── 5. 推送（guard-ok：显式放行 deploy_gate 部署门控）─────
 echo "📤 推送到 GitHub..."
 git remote set-url origin "git@github.com:${GITHUB_USER}/${GITHUB_REPO}.git" 2>/dev/null || true
-git push origin main --tags
-echo "   ✅ GitHub 推送完成"
-echo ""
-
-# ── 5. 发布到 PyPI（curl 手动 multipart，不依赖 twine）───
-echo "📤 发布到 PyPI..."
-
-# 优先尝试 twine
-TWINE_PYTHON=""
-for py in "$BUILD_PYTHON" /usr/bin/python3; do
-    if "$py" -c "import twine" 2>/dev/null; then
-        TWINE_PYTHON="$py"
-        break
-    fi
-done
-
-if [[ -n "$TWINE_PYTHON" ]]; then
-    echo "   使用 twine ($TWINE_PYTHON)"
-    "$TWINE_PYTHON" -m twine upload --username __token__ --password "$PYPI_TOKEN" dist/*
-else
-    echo "   twine 不存在，使用 curl 直传..."
-    for f in dist/liquid_loop-*.tar.gz; do
-        [[ ! -f "$f" ]] && continue
-        FNAME=$(basename "$f")
-        MD5=$(md5 -q "$f")
-        SHA256=$(shasum -a 256 "$f" | cut -d' ' -f1)
-        echo "   上传 $FNAME..."
-        RESP=$(curl -s -w "\n%{http_code}" -X POST https://upload.pypi.org/legacy/ \
-            -H "Authorization: Token $PYPI_TOKEN" \
-            -F ":action=file_upload" \
-            -F "protocol_version=1" \
-            -F "metadata_version=2.1" \
-            -F "name=$GITHUB_REPO" \
-            -F "version=$NEW_VERSION" \
-            -F "filetype=sdist" \
-            -F "pyversion=source" \
-            -F "md5_digest=$MD5" \
-            -F "sha256_digest=$SHA256" \
-            -F "content=@$f;type=application/gzip")
-        HTTP_CODE=$(echo "$RESP" | tail -1)
-        if [[ "$HTTP_CODE" == "200" ]]; then
-            echo "   ✅ $FNAME 上传成功"
-        else
-            echo "   ❌ $FNAME 上传失败 ($HTTP_CODE)"
-            echo "$RESP" | head -5
-        fi
-    done
-    for f in dist/liquid_loop-*.whl; do
-        [[ ! -f "$f" ]] && continue
-        FNAME=$(basename "$f")
-        MD5=$(md5 -q "$f")
-        SHA256=$(shasum -a 256 "$f" | cut -d' ' -f1)
-        echo "   上传 $FNAME..."
-        RESP=$(curl -s -w "\n%{http_code}" -X POST https://upload.pypi.org/legacy/ \
-            -H "Authorization: Token $PYPI_TOKEN" \
-            -F ":action=file_upload" \
-            -F "protocol_version=1" \
-            -F "metadata_version=2.1" \
-            -F "name=$GITHUB_REPO" \
-            -F "version=$NEW_VERSION" \
-            -F "filetype=bdist_wheel" \
-            -F "pyversion=py3" \
-            -F "md5_digest=$MD5" \
-            -F "sha256_digest=$SHA256" \
-            -F "content=@$f;type=application/zip")
-        HTTP_CODE=$(echo "$RESP" | tail -1)
-        if [[ "$HTTP_CODE" == "200" ]]; then
-            echo "   ✅ $FNAME 上传成功"
-        else
-            echo "   ❌ $FNAME 上传失败 ($HTTP_CODE)"
-            echo "$RESP" | head -5
-        fi
-    done
+git push origin main # guard-ok
+if [[ "$BUMP" != "dry" ]]; then
+    git push origin "v$NEW_VERSION" # guard-ok
 fi
+echo "   ✅ 推送完成（触发 Actions publish → PyPI Trusted Publishing）"
 echo ""
 
-# ── 6. 清理 ──────────────────────────────────────────────
+# ── 6. 等 Actions publish + PyPI 验证 ────────────────────
+if [[ "$BUMP" != "dry" ]] && command -v gh >/dev/null; then
+    echo "⏳ 等待 Actions publish run..."
+    RUN_ID=$(gh run list --workflow=publish.yml --limit 1 --json databaseId,headBranch \
+             --jq ".[] | select(.headBranch==\"main\") | .databaseId" 2>/dev/null | head -1)
+    if [[ -n "$RUN_ID" ]]; then
+        gh run watch "$RUN_ID" --exit-status >/dev/null 2>&1 || { echo "❌ publish run 失败"; exit 1; }
+        echo "   ✅ Actions publish success"
+    fi
+    echo "🔍 验证 PyPI 版本（等待 CDN 传播，最多 3 分钟）..."
+    for i in $(seq 1 12); do
+        V=$(curl -s "https://pypi.org/pypi/${GITHUB_REPO}/json" 2>/dev/null \
+            | python3 -c "import sys,json; print(json.load(sys.stdin)['info']['version'])" 2>/dev/null || echo "")
+        [[ "$V" == "$NEW_VERSION" ]] && { echo "   ✅ PyPI latest = $NEW_VERSION"; break; }
+        [[ $i -eq 12 ]] && { echo "   ⚠️  PyPI 尚未同步（CDN 延迟），稍后手动复查"; break; }
+        sleep 15
+    done
+    echo "🏷️  创建 GitHub Release..."
+    gh release create "v$NEW_VERSION" --title "v$NEW_VERSION" \
+        --notes "$(git log -1 --format='%s') — 见 CHANGELOG.md" 2>/dev/null || echo "   ⚠️ Release 已存在或创建失败"
+fi
+
+# ── 7. 清理 ──────────────────────────────────────────────
 rm -rf dist build *.egg-info
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
