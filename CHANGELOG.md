@@ -1,5 +1,11 @@
 # Changelog
 
+## v2.0.0 (2026-08-24) — 液环统一版号里程碑（1.9.0→2.0.0）
+
+- **版本统一**：`pyproject.toml` / `liquid_loop/__init__.__version__` / `textutil._get_version` 回退默认 / 投喂客户端 `feed_liquidloop` 全部对齐 `2.0.0`。
+- 投喂客户端新增 `LIQUIDLOOP_CLIENT_VERSION` 同源常量，`/health` 打印显示 `server=` + `client=` 协同校验（飞哥「液环版本该统一版号了」2026-08-24 定）。
+- **禁区不动**：数据 schema 版本（`storage.py` 默认 `0.4.0`）与 workspace state 版本（`cli.py` 默认 `0.5.1`）属记忆层数据格式版本，保持原值（红线#4）。
+
 ## v1.9.0 (2026-08-19) — PerceptionGate 因果共生门控 + 工程化修复（v1.8.4→v1.9.0）
 
 - **PerceptionGate 门控-液环因果共生环胶水层**（5174dec，对应蒸馏 gate_liquid_causal_symbiosis_distill）：

@@ -46,7 +46,7 @@ def _get_version() -> str:
     pyproject = Path(__file__).parent.parent / "pyproject.toml"
     if pyproject.exists():
         data = tomllib.loads(pyproject.read_text())
-        return data.get("project", {}).get("version", "1.8.4")
+        return data.get("project", {}).get("version", "2.0.0")
     return "1.8.4"
 
 def _tokenize(text: str) -> List[str]:
