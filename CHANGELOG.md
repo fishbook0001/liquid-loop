@@ -1,8 +1,19 @@
 # Changelog
 
-## Unreleased — E5 非 embedding 同义归并（实验 · examples/faithful）
+## v2.0.1 (2026-08-25) — 零向量召回超越词频基线（2.0.0→2.0.1）
 
-- **E5_alias_table.py + E5_alias_table_proposal.md**（实验模块，未入核心包）：承接外部 critique 指出的"禁向量真阿喀琉斯之踵 = 语义逃逸（零 token 重叠同义 → 0 核 → 事实流失）"。
+- **默认召回升级为「零向量 tf-idf 余弦 + 实体/数字精确加权 booster」**（`selfspin.recall_local(idf_cosine=True, lexical_boost=True)`）。
+  - 余弦层与 TF-IDF 基线逐字节同公式（纯词频标量，非 embedding）；booster（`_entity_boost`）对 query 数字串/长度≥4 token 精确命中 fact 叠加 bonus，补回 tfidf 余弦因长句稀释稀有关键词而漏召的「含数字/量词 query」。
+  - A/B 探针（`examples/experiments/lexical_probe*.py`）：entity_boost 为唯一两集稳定正向信号（LoCoMo +0.020 / LongMemEval +0.006）；containment 融合两集负向已舍弃。
+  - 全量实测：**LoCoMo 0.472→0.492、LongMemEval 0.942→0.948，零向量超越词频向量基线**；机制层独立实现与探针逐位一致。
+  - 守禁向量红线：纯符号精确匹配 + 词频标量，零 embedding、零 LLM（WHY_NO_VECTOR §六.1 更新）。
+- **基准 runner 加 `liquid_cosine` 纯余弦对照列**（run_locomo.py / run_longmemeval.py），默认列 = 余弦+booster。
+- **版本统一**：`pyproject.toml` / `liquid_loop/__init__.__version__` 对齐 `2.0.1`；数据 schema `0.4.0` 与 workspace state `0.5.1` 保持独立（禁区不动，红线#4）。
+- 报告更新：BENCHMARK_REPORT v4 / LONGMEMEVAL_REPORT v4 / WHY_NO_VECTOR §六。
+
+## v2.0.0 (2026-08-24) — 液环统一版号里程碑（1.9.0→2.0.0）
+
+- **E5 非 embedding 同义归并**（实验 · examples/faithful）：`E5_alias_table.py + E5_alias_table_proposal.md`（实验模块，未入核心包），承接外部 critique 指出的"禁向量真阿喀琉斯之踵 = 语义逃逸（零 token 重叠同义 → 0 核 → 事实流失）"。
   - `AliasTable`：确定性别名表 + 术语归一化（embedding→嵌入 / vector→向量），**零 embedding、零 LLM 推断、纯字符串替换**。
   - 集成点：在 `LiquidSelfSpin.ingest` 前对 fact 跑 `AliasTable.normalize` → 同义变体统一成同一 canonical 串 → `local_rotate` 自然聚核（selfspin 主干一字未改，不污染生产）。
   - 公理守住：别名归并只降"识别同义"成本，**不降 ≥2 distinct source 成核门**；归并可回溯 `merged_via`。

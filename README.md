@@ -4,7 +4,7 @@
 
 > **Self-Organizing Cognitive Memory for AI Agents** — Zero LLM dependency, pure Python implementation of the Liquid Loop theory.
 
-> **当前包版本：`2.0.0`**（2026-08-24 统一版号里程碑，详见 [CHANGELOG.md](CHANGELOG.md)。数据 schema `0.4.0` 与 workspace state `0.5.1` 为记忆层数据格式版本，独立于包发布版本）。
+> **当前包版本：`2.0.1`**（2026-08-25 零向量召回超越词频基线，详见 [CHANGELOG.md](CHANGELOG.md)。数据 schema `0.4.0` 与 workspace state `0.5.1` 为记忆层数据格式版本，独立于包发布版本）。
 
 [![PyPI](https://img.shields.io/pypi/v/liquid-loop.svg)](https://pypi.org/project/liquid-loop/)
 [![Python](https://img.shields.io/pypi/pyversions/liquid-loop.svg)](https://pypi.org/project/liquid-loop/)

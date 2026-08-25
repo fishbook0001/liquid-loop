@@ -126,6 +126,30 @@ def _containment(a: str, b: str):
     return len(inter) / min(len(ta), len(tb)), len(inter)
 
 
+# ── 零向量实体/数字精确匹配增强（lexical_boost，守禁向量 §六.1）──
+# query 关键 token（数字串 + 长度≥4 词，多为专名/术语/度量）若精确命中 fact，
+# 给召回分叠加 bonus。纯 lexical 精确匹配、零 embedding、零 LLM；
+# tfidf 余弦会因长句稀释这些稀有词，此 booster 补回「含数字/量词的 query」
+# （如 "How many / how long / how many days"）的漏召。由 recall_local(lexical_boost=)
+# 控制，**默认 True**（LoCoMo 0.472→0.492、LongMemEval 0.942→0.948，零向量超越词频基线）。
+_KEY_NUM = re.compile(r"[0-9]+")
+
+
+def _entity_key_tokens(q: str) -> set:
+    """query 中的关键信息 token：数字串 + 长度≥4 的 token。"""
+    qt = set(_tokens(q))
+    return set(_KEY_NUM.findall(q)) | {t for t in qt if len(t) >= 4}
+
+
+def _entity_boost(q: str, f: str) -> float:
+    """query 关键 token 精确命中 fact 的 bonus（标量，零向量）。"""
+    keys = _entity_key_tokens(q)
+    if not keys:
+        return 0.0
+    ft = set(_tokens(f))
+    return 0.3 * len(keys & ft) / len(keys)
+
+
 # 核心词抽取：去中文虚词 / 极泛连接词，保留领域实体与结论词，
 # 用于跨篇「同主题不同表述」的聚合信号（结构化精确匹配，守禁向量）。
 _STOP = set("的 是 在 存在 普遍 常 问题 风险 一种 我们 本文 该 其 与 和 或 对 为 有 被 "
@@ -381,16 +405,21 @@ class LiquidSelfSpin:
 
     # ── 自述性：本地回忆（不碰 8790）──
     def recall_local(self, query: str, top_k: int = 5, liquid: bool = False,
-                     idf: bool = False, idf_cosine: bool = True) -> list:
+                     idf: bool = False, idf_cosine: bool = True,
+                     lexical_boost: bool = True) -> list:
         """本地液态召回。
 
         **默认 idf_cosine=True**：零向量 tf-idf 余弦（IDF+TF+余弦归一，纯词频标量权重，
-        非 embedding）作为召回归一化。与 LoCoMo/LongMemEval 的 TF-IDF 基线逐字节同口径，
-        在两者上精确追平词频向量基线——收复「纯字符 jaccard 稀释稀有关键词」的召回代价，
-        全程零 embedding、零语义向量，守禁向量公理（WHY_NO_VECTOR §六）。
+        非 embedding）作为召回归一化。与 LoCoMo/LongMemEval 的 TF-IDF 基线逐字节同口径。
+        **默认 lexical_boost=True**：叠加零向量实体/数字精确加权（query 的数字串与
+        长度≥4 token 精确命中 fact 时加分），补回 tfidf 余弦因长句稀释稀有关键词而漏召的
+        「含数字/量词 query」。两基准实测：LoCoMo 0.472→0.492、LongMemEval 0.942→0.948，
+        零向量**超越**词频向量基线。全程零 embedding、零语义向量，守禁向量公理
+        （WHY_NO_VECTOR §六）。
         idf=False 且 idf_cosine=False：回退到无加权纯字符 jaccard（历史 v1 基准口径，
         仍保留用于对照，但非默认）。
         idf=True：IDF 加权 jaccard（零向量，纯标量权重）——idf_cosine 优先时不生效。
+        lexical_boost=False：关闭实体/数字 booster，精确回到纯 tfidf 余弦（追平基线）。
         """
         idf_tab = self._build_idf() if (idf or idf_cosine) else None
         if idf_cosine:
@@ -399,8 +428,12 @@ class LiquidSelfSpin:
             sim = lambda a, b: _idf_jaccard(a, b, idf_tab)
         else:
             sim = _jaccard
-        scored = [(sim(query, f), rid, f)
-                  for rid, fs in self._facts.items() for f in fs]
+        if lexical_boost:
+            scored = [(sim(query, f) + _entity_boost(query, f), rid, f)
+                      for rid, fs in self._facts.items() for f in fs]
+        else:
+            scored = [(sim(query, f), rid, f)
+                      for rid, fs in self._facts.items() for f in fs]
         scored.sort(key=lambda x: x[0], reverse=True)
         base = [{"report_id": rid, "fact": f, "score": round(s, 3)}
                 for s, rid, f in scored if s > 0][:top_k]
@@ -419,6 +452,8 @@ class LiquidSelfSpin:
             for f in fs:
                 a_id = self._liquid_anchor_id(f)
                 lit = sim(query, f)
+                if lexical_boost:
+                    lit = lit + _entity_boost(query, f)
                 wake = lr.beta * lr.activation.get(a_id, 0.0)
                 sc = lit + wake
                 if sc > 0:

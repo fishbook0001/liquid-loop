@@ -73,7 +73,8 @@ def build_ss(turns: list, alias=None):
     return ss, nuclei
 
 
-def eval_recall(ss, qa_items: list, alias=None, idf: bool = False, idf_cosine: bool = False):
+def eval_recall(ss, qa_items: list, alias=None, idf: bool = False, idf_cosine: bool = False,
+                lexical_boost: bool = False):
     """返回 (命中数, 总数, 噪声污染命中数)。命中=top_k 含任一标注 evidence dialog id。
     alias 启用时 query 与 corpus 须同源归一化（否则单边替换破坏匹配）。
     idf=True 启用零向量 IDF 加权 jaccard 召回；idf_cosine=True 启用零向量 IDF 加权余弦。"""
@@ -84,7 +85,8 @@ def eval_recall(ss, qa_items: list, alias=None, idf: bool = False, idf_cosine: b
             continue
         total += 1
         qtext = alias.normalize_en(q["question"]) if alias else q["question"]
-        res = ss.recall_local(qtext, top_k=TOP_K, liquid=False, idf=idf, idf_cosine=idf_cosine)
+        res = ss.recall_local(qtext, top_k=TOP_K, liquid=False, idf=idf, idf_cosine=idf_cosine,
+                              lexical_boost=lexical_boost)
         polluted = False
         for r in res:
             rid = r["report_id"]
@@ -99,7 +101,7 @@ def eval_recall(ss, qa_items: list, alias=None, idf: bool = False, idf_cosine: b
 
 
 def run_conv(conv: dict, qa_items: list, alias=None, noise: float = 0.0, seed: int = 0,
-             idf: bool = False, idf_cosine: bool = False):
+             idf: bool = False, idf_cosine: bool = False, lexical_boost: bool = False):
     turns = collect_turns(conv)
     if noise > 0:
         rng = random.Random(seed)
@@ -108,7 +110,8 @@ def run_conv(conv: dict, qa_items: list, alias=None, noise: float = 0.0, seed: i
             # 噪声：含独特 token，字面与任何 question 不重叠 → 若进 top_k 即污染
             turns.append((f"N{i}", f"zxqw noise token {i} kjpw unrelated vytr"))
     ss, nuclei = build_ss(turns, alias)
-    hits, total, noise_hits = eval_recall(ss, qa_items, alias=alias, idf=idf, idf_cosine=idf_cosine)
+    hits, total, noise_hits = eval_recall(ss, qa_items, alias=alias, idf=idf, idf_cosine=idf_cosine,
+                                          lexical_boost=lexical_boost)
     return {
         "hit": hits, "total": total, "rate": hits / total if total else 0,
         "nucleated": len(nuclei) if nuclei else 0, "facts": len(turns),
@@ -212,20 +215,24 @@ def main():
     print(f"conversations={len(convs)}  top_k={TOP_K}  fast_jaccard={FAST_J}")
     print(f"E5 英文别名表: {ALIAS_EN} ({'开' if not subset else '开'})\n")
 
-    # 机制默认列 = liquid（零向量 IDF 余弦）。liquid_jaccard 为 v1 历史口径对照。
-    agg = {k: [0, 0, 0] for k in ("liquid", "liquid_jaccard", "liquid_e5",
+    # 机制默认列 = liquid（零向量 IDF 余弦 + 实体/数字 booster，超越词频基线）。
+    # liquid_cosine = 纯 tfidf 余弦（lexical_boost=False，追平基线）对照。
+    agg = {k: [0, 0, 0] for k in ("liquid", "liquid_cosine", "liquid_jaccard", "liquid_e5",
                                    "liquid_idf", "s4", "tfidf", "tfidf_s4")}
     nucl_jac, nucl_e5, facts_total = 0, 0, 0
     for s in convs:
         qa = s["qa"]
-        r_liq = run_conv(s["conversation"], qa, alias=None, idf_cosine=True)      # 机制默认
+        r_liq = run_conv(s["conversation"], qa, alias=None, idf_cosine=True, lexical_boost=True)
+        r_cos = run_conv(s["conversation"], qa, alias=None, idf_cosine=True, lexical_boost=False)
         r_jac = run_conv(s["conversation"], qa, alias=None, idf_cosine=False)     # 纯 jaccard v1
         r_e5 = run_conv(s["conversation"], qa, alias=alias_en, idf_cosine=False)   # E5 英文
         r_idf = run_conv(s["conversation"], qa, alias=None, idf=True, idf_cosine=False)
-        r_s4 = run_conv(s["conversation"], qa, alias=None, noise=0.2, idf_cosine=True)
+        r_s4 = run_conv(s["conversation"], qa, alias=None, noise=0.2, idf_cosine=True,
+                        lexical_boost=True)
         r_tf = run_tfidf(s["conversation"], qa, noise=0.0)
         r_tf_s4 = run_tfidf(s["conversation"], qa, noise=0.2)
-        for key, r in (("liquid", r_liq), ("liquid_jaccard", r_jac), ("liquid_e5", r_e5),
+        for key, r in (("liquid", r_liq), ("liquid_cosine", r_cos),
+                       ("liquid_jaccard", r_jac), ("liquid_e5", r_e5),
                        ("liquid_idf", r_idf), ("s4", r_s4),
                        ("tfidf", r_tf), ("tfidf_s4", r_tf_s4)):
             agg[key][0] += r["hit"]
@@ -235,14 +242,17 @@ def main():
         nucl_e5 += r_e5["nucleated"]
         facts_total += r_liq["facts"]
         print(f"  [{s['sample_id']}] facts={r_liq['facts']:>4} "
-              f"liquid={r_liq['rate']:.3f} jac={r_jac['rate']:.3f} e5={r_e5['rate']:.3f} "
-              f"idf={r_idf['rate']:.3f} s4={r_s4['rate']:.3f} tfidf={r_tf['rate']:.3f} tfidf_s4={r_tf_s4['rate']:.3f}(N{r_tf_s4['noise_hits']})")
+              f"liquid={r_liq['rate']:.3f} cos={r_cos['rate']:.3f} jac={r_jac['rate']:.3f} "
+              f"e5={r_e5['rate']:.3f} idf={r_idf['rate']:.3f} s4={r_s4['rate']:.3f} "
+              f"tfidf={r_tf['rate']:.3f} tfidf_s4={r_tf_s4['rate']:.3f}(N{r_tf_s4['noise_hits']})")
 
     tot = agg["liquid"][1]
     print(f"\n━━━ 汇总（{tot} QA 题 / {facts_total} 条液态记忆）━━━")
     print(f"{'mode':<22}{'recall@K':>10}{'hits':>8}{'noise_topk':>12}{'成核数':>8}")
     print(f"{'none(无记忆)':<22}{'0.000':>10}{'0':>8}{'-':>12}{'-':>8}")
-    print(f"{'liquid(默认·零向量余弦)':<22}{agg['liquid'][0]/tot:>10.3f}{agg['liquid'][0]:>8}"
+    print(f"{'liquid(默认·余弦+实体booster)':<22}{agg['liquid'][0]/tot:>10.3f}{agg['liquid'][0]:>8}"
+          f"{'-':>12}{'-':>8}")
+    print(f"{'liquid_cosine(纯余弦对照)':<22}{agg['liquid_cosine'][0]/tot:>10.3f}{agg['liquid_cosine'][0]:>8}"
           f"{'-':>12}{'-':>8}")
     print(f"{'liquid_jaccard(v1对照)':<22}{agg['liquid_jaccard'][0]/tot:>10.3f}{agg['liquid_jaccard'][0]:>8}"
           f"{'-':>12}{nucl_jac:>8}")
@@ -257,8 +267,10 @@ def main():
     print(f"{'tfidf_s4(+噪声)':<22}{agg['tfidf_s4'][0]/tot:>10.3f}{agg['tfidf_s4'][0]:>8}"
           f"{agg['tfidf_s4'][2]:>12}{'-':>8}")
     print(f"\n注：成核数极低属预期（单遍真实流无重复）→ 印证 critique 边界；")
-    print(f"主战场=液态召回。liquid(默认) = 机制层零向量 IDF 余弦（IDF+TF+余弦，非 embedding）。")
-    print(f"liquid(默认) ≈ tfidf 即证明「召回缺口」本质是词频归一化差异，非需要语义向量。E5 为临时小样本。")
+    print(f"主战场=液态召回。liquid(默认) = 机制层零向量 IDF 余弦 + 实体/数字 booster"
+          f"（纯词频标量 + 精确命中 bonus，非 embedding）。")
+    print(f"liquid(默认) > tfidf 即证明：召回缺口本质是词频归一化差异 + 稀有词稀释，"
+          f"零向量可**超越**词频向量基线，非需要语义向量。E5 为临时小样本。")
     print(f"tfidf 为**零依赖词频向量基线**（纯标准库，零 HF）：与液环同口径对照；")
     print(f"若 tfidf_s4 的 noise_topk > 0 即验证 critique「向量检索单条噪声入池」弱点。")
 

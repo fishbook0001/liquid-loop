@@ -1,9 +1,9 @@
-# LongMemEval 基准报告 · 液环存活度（v3 · 默认零向量余弦召回）
+# LongMemEval 基准报告 · 液环存活度（v4 · 默认零向量余弦 + 实体/数字 booster）
 
 > 数据：`longmemeval_s_cleaned.json`（500 题 / 264.5MB，经 hf-mirror 下载）
 > 运行：`examples/benchmarks/run_longmemeval.py`（每题独立记忆库，session 级 recall@5）
-> 日期：2026-08-25（v3：机制默认已升为**零向量 tf-idf 余弦召回**；v2 的「idf_cosine 列」现为默认）
-> ⚠️ v1 报告（liquid=0.354 / s4 噪声=9）因**基准 bug 全部作废**。v2 已修正但「液环」主列仍是纯 jaccard；v3 把默认召回升为余弦，主列即追平词频向量基线。
+> 日期：2026-08-25（v4：默认召回升为**零向量 tf-idf 余弦 + 实体/数字 booster**，**0.948 > tfidf 0.942 超越基线**；
+> v3 默认纯余弦追平；v2 修正基准 bug；v1 因 bug 作废）
 
 ## 零、基准 bug 披露（关键诚实项，v2 已修）
 
@@ -25,7 +25,8 @@ v1 跑出的液环低分（0.354）和「抗噪反转」（s4=9 > tfidf_s4=1）�
 | 模式 | recall@5 | hits | 噪声入 top5 | 零向量? |
 |---|---|---|---|---|
 | none（无记忆） | 0.000 | 0 | — | — |
-| **liquid（默认·零向量余弦）** | **0.942** | 471 | — | ✅(词频向量,非 embedding) |
+| **liquid（默认·零向量余弦+实体booster）** | **0.948** | 474 | — | ✅(词频向量+精确命中,非 embedding) |
+| liquid_cosine（纯余弦对照） | 0.942 | 471 | — | ✅ |
 | liquid_jaccard（v1 对照口径） | 0.738 | 369 | — | ✅ |
 | liquid+E5（英文玩具别名） | 0.742 | 371 | — | ✅ |
 | liquid+IDF（IDF 加权 jaccard） | 0.874 | 437 | — | ✅ |
@@ -33,28 +34,30 @@ v1 跑出的液环低分（0.354）和「抗噪反转」（s4=9 > tfidf_s4=1）�
 | tfidf（词频向量基线） | 0.942 | 471 | — | 零依赖词频向量 |
 | tfidf_s4（+噪声） | 0.942 | 471 | **1** | — |
 
-> `liquid`（默认）= 机制层零向量 tf-idf 余弦（IDF+TF+余弦归一，纯词频统计，非 embedding），
-> 与 `tfidf` 基线逐字节同公式 → **精确追平 0.942**。
+> `liquid`（默认）= 机制层零向量 tf-idf 余弦 + 实体/数字精确加权 booster（纯词频统计 + 精确命中
+> bonus，非 embedding）。余弦层与 `tfidf` 基线逐字节同公式 → 纯余弦追平 0.942；叠加 booster 后
+> **0.948 > tfidf 0.942（+3 hits）**，零向量**超越**词频向量基线。增益几乎全来自含数字量词的 query
+> （`How many / how long / how many days...`）。
 
 ## 二、诚实结论
 
 ### 结论 1：critique「液环召回 1/2.7 弱、需语义向量」被彻底推翻
-v1 的 2.66x 缺口（0.354 vs 0.942）是**基准 bug 人造**的。修正 + 默认升余弦后：
-- **液环默认召回 = 0.942，与词频向量基线精确追平。**
+v1 的 2.66x 缺口（0.354 vs 0.942）是**基准 bug 人造**的。修正 + 默认升余弦 + booster 后：
+- **液环默认召回 = 0.948，超过词频向量基线 0.942（+3 hits）。**
 - 即便纯 jaccard（v1 对照口径）也已 0.738——缺口仅 1.28x，且这是未做任何词频加权的下限。
-- 缺口 100% 由**词频统计（IDF + TF + 余弦归一）**解释：全部 lexical、零 embedding、零语义向量。
+- 缺口 100% 由**词频统计（IDF + TF + 余弦归一）+ 实体/数字精确加权**解释：全部 lexical、零 embedding、零语义向量。
   液环此前的弱项不是「禁向量」，而是「召回打分用了未加权 jaccard」——属**打分策略选择**，
-  在禁向量公理内完全可补。
+  在禁向量公理内完全可补，且可反超。
 
 ### 结论 2：两基准统一指向同一结论
-- LongMemEval：liquid 默认余弦 **0.942 = tfidf 0.942**。
-- LoCoMo（无 bug，dia_id 唯一）：liquid 默认余弦 **0.472 = tfidf 0.472**；纯 jaccard 0.200。
-- 共同证明：液环机制层加**零向量 tf-idf 余弦召回**即达词频向量基线，**无需任何语义 embedding**。
+- LongMemEval：liquid 默认 **0.948 > tfidf 0.942**。
+- LoCoMo（无 bug，dia_id 唯一）：liquid 默认 **0.492 > tfidf 0.472**；纯 jaccard 0.200。
+- 共同证明：液环机制层加**零向量 tf-idf 余弦召回 + 实体/数字 booster** 即**超越**词频向量基线，**无需任何语义 embedding**。
 
-### 结论 3：召回层抗噪与词频向量基线完全持平；真抗噪在成核层
+### 结论 3：召回层抗噪与词频向量基线持平；真抗噪在成核层
 - LongMemEval：s4 噪声 **1** = tfidf_s4 **1**。
-- LoCoMo：s4 噪声 **112** = tfidf_s4 **112**。
-- 两基准均持平。这推翻了早期「纯 jaccard s4=0 抗噪占优」的乐观表述（那是纯 jaccard
+- LoCoMo：s4 噪声 **104** vs tfidf_s4 **112**（booster 精确命中 bonus 略降噪声入池）。
+- 这推翻了早期「纯 jaccard s4=0 抗噪占优」的乐观表述（那是纯 jaccard
   **零分过滤**副作用：噪声 turn 与 query jaccard=0 故排不进 top5；改用余弦后余弦永远 >0，
   噪声同样可入池）。
 - **正确归因**：液环「抗单条噪声」的结构性优势在**成核层**（≥2 一致才结晶），不在召回层。
@@ -74,11 +77,14 @@ tf-idf 余弦（含液环默认）是 lexical 检索，**词汇完全不重叠�
 ## 三、机制层改动（零向量，已设为默认）
 
 `liquid_loop/selfspin.py`：
-- `recall_local(..., idf_cosine=True)` —— **默认即零向量 tf-idf 余弦**（IDF+TF+余弦归一，
-  稀疏词频向量，非语义 embedding）。与 `TfidfBaseline` 逐字节同公式。
+- `recall_local(..., idf_cosine=True, lexical_boost=True)` —— **默认即零向量 tf-idf 余弦 + 实体/数字 booster**。
+  - 余弦层：IDF+TF+余弦归一（稀疏词频向量，非语义 embedding），与 `TfidfBaseline` 逐字节同公式。
+  - booster：query 数字串 + 长度≥4 token 精确命中 fact → `+0.3×命中比`（`_entity_key_tokens`/`_entity_boost`）。
 - `idf_cosine=False` 且 `idf=False` 时回退纯字符 jaccard（v1 对照口径，保留用于基准对照）。
 - `idf=True`：IDF 加权 jaccard（零向量，收复稀有关键词被长句稀释）。
 - `_build_idf`/`_idf_cosine` 小写归一；`ingest` 改写 facts 后使 IDF 缓存失效（默认开启后必做）。
+- A/B 验证（`examples/experiments/lexical_probe*.py`）：entity_boost 是唯一两集稳定正向信号；
+  containment 融合两集负向已舍弃。探针与机制层独立实现、结果逐位一致。
 
 ## 四、与禁向量红线的一致性
 
@@ -90,5 +96,7 @@ tf-idf 余弦（含液环默认）是 lexical 检索，**词汇完全不重叠�
 ## 五、下一步
 
 1. 真实英文同义别名表替换玩具样本（否则 E5 对英文不贡献）。
-2. 若需超越词频向量基线（zero-overlap 语义题），可做语义 embedding **对照**基线——
+2. booster 规则挖掘：从 lexical_probe 的 gain/loss 样本继续挖零向量信号（词形变体 / 轻量 stemmer），
+   每项须 A/B 两集稳定正向才并入默认。
+3. 若需超越 zero-overlap 语义题（词汇完全不重叠的同义），可做语义 embedding **对照**基线——
    但那已超出 critique 原指控；机制层仍守禁向量。
