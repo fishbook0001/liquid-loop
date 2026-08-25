@@ -1,0 +1,67 @@
+━━━ LongMemEval benchmark · 液环存活度 ━━━
+questions=500 (of 500)  top_k=5  fast_jaccard=0.6
+E5 英文别名表: 开
+
+  [q  1] facts= 550 liquid=0.000 e5=0.000 s4=0.000 tfidf=1.000 tfidf_s4=1.000(N0)
+  [q 10] facts= 487 liquid=0.000 e5=0.000 s4=0.000 tfidf=1.000 tfidf_s4=1.000(N0)
+  [q 20] facts= 505 liquid=0.000 e5=0.000 s4=0.000 tfidf=1.000 tfidf_s4=1.000(N0)
+  [q 30] facts= 533 liquid=0.000 e5=0.000 s4=0.000 tfidf=1.000 tfidf_s4=1.000(N0)
+  [q 40] facts= 495 liquid=0.000 e5=0.000 s4=0.000 tfidf=1.000 tfidf_s4=1.000(N0)
+  [q 50] facts= 512 liquid=0.000 e5=0.000 s4=0.000 tfidf=1.000 tfidf_s4=1.000(N0)
+  [q 60] facts= 585 liquid=0.000 e5=0.000 s4=0.000 tfidf=1.000 tfidf_s4=1.000(N0)
+  [q 70] facts= 506 liquid=0.000 e5=0.000 s4=0.000 tfidf=1.000 tfidf_s4=1.000(N0)
+  [q 80] facts= 515 liquid=0.000 e5=0.000 s4=0.000 tfidf=1.000 tfidf_s4=1.000(N0)
+  [q 90] facts= 479 liquid=1.000 e5=1.000 s4=1.000 tfidf=1.000 tfidf_s4=1.000(N0)
+  [q100] facts= 477 liquid=1.000 e5=1.000 s4=1.000 tfidf=1.000 tfidf_s4=1.000(N0)
+  [q110] facts= 474 liquid=1.000 e5=1.000 s4=1.000 tfidf=1.000 tfidf_s4=1.000(N0)
+  [q120] facts= 491 liquid=1.000 e5=1.000 s4=1.000 tfidf=1.000 tfidf_s4=1.000(N0)
+  [q130] facts= 521 liquid=0.000 e5=0.000 s4=0.000 tfidf=0.000 tfidf_s4=0.000(N0)
+  [q140] facts= 502 liquid=0.000 e5=0.000 s4=0.000 tfidf=1.000 tfidf_s4=1.000(N0)
+  [q150] facts= 507 liquid=0.000 e5=0.000 s4=0.000 tfidf=0.000 tfidf_s4=0.000(N0)
+  [q160] facts= 524 liquid=0.000 e5=0.000 s4=0.000 tfidf=1.000 tfidf_s4=1.000(N0)
+  [q170] facts= 522 liquid=1.000 e5=1.000 s4=1.000 tfidf=1.000 tfidf_s4=1.000(N0)
+  [q180] facts= 476 liquid=0.000 e5=0.000 s4=0.000 tfidf=1.000 tfidf_s4=1.000(N0)
+  [q190] facts= 491 liquid=0.000 e5=0.000 s4=0.000 tfidf=1.000 tfidf_s4=1.000(N0)
+  [q200] facts= 467 liquid=1.000 e5=1.000 s4=1.000 tfidf=1.000 tfidf_s4=1.000(N0)
+  [q210] facts= 466 liquid=1.000 e5=1.000 s4=1.000 tfidf=1.000 tfidf_s4=1.000(N0)
+  [q220] facts= 468 liquid=0.000 e5=0.000 s4=0.000 tfidf=1.000 tfidf_s4=1.000(N0)
+  [q230] facts= 522 liquid=0.000 e5=1.000 s4=0.000 tfidf=1.000 tfidf_s4=1.000(N0)
+  [q240] facts= 495 liquid=0.000 e5=0.000 s4=0.000 tfidf=1.000 tfidf_s4=1.000(N0)
+  [q250] facts= 489 liquid=0.000 e5=0.000 s4=0.000 tfidf=0.000 tfidf_s4=0.000(N0)
+  [q260] facts= 467 liquid=0.000 e5=0.000 s4=0.000 tfidf=1.000 tfidf_s4=1.000(N0)
+  [q270] facts= 495 liquid=0.000 e5=0.000 s4=0.000 tfidf=1.000 tfidf_s4=1.000(N0)
+  [q280] facts= 476 liquid=0.000 e5=0.000 s4=0.000 tfidf=1.000 tfidf_s4=1.000(N0)
+  [q290] facts= 457 liquid=1.000 e5=1.000 s4=1.000 tfidf=1.000 tfidf_s4=1.000(N0)
+  [q300] facts= 476 liquid=0.000 e5=0.000 s4=0.000 tfidf=0.000 tfidf_s4=0.000(N0)
+  [q310] facts= 467 liquid=1.000 e5=1.000 s4=1.000 tfidf=1.000 tfidf_s4=1.000(N0)
+  [q320] facts= 489 liquid=1.000 e5=1.000 s4=1.000 tfidf=1.000 tfidf_s4=1.000(N0)
+  [q330] facts= 532 liquid=0.000 e5=0.000 s4=0.000 tfidf=1.000 tfidf_s4=1.000(N0)
+  [q340] facts= 533 liquid=0.000 e5=0.000 s4=0.000 tfidf=1.000 tfidf_s4=1.000(N0)
+  [q350] facts= 458 liquid=0.000 e5=0.000 s4=0.000 tfidf=1.000 tfidf_s4=1.000(N0)
+  [q360] facts= 434 liquid=0.000 e5=0.000 s4=0.000 tfidf=1.000 tfidf_s4=1.000(N0)
+  [q370] facts= 396 liquid=1.000 e5=1.000 s4=1.000 tfidf=1.000 tfidf_s4=1.000(N0)
+  [q380] facts= 494 liquid=1.000 e5=1.000 s4=1.000 tfidf=1.000 tfidf_s4=1.000(N0)
+  [q390] facts= 482 liquid=0.000 e5=0.000 s4=0.000 tfidf=1.000 tfidf_s4=1.000(N0)
+  [q400] facts= 506 liquid=0.000 e5=0.000 s4=0.000 tfidf=1.000 tfidf_s4=1.000(N0)
+  [q410] facts= 472 liquid=0.000 e5=0.000 s4=0.000 tfidf=1.000 tfidf_s4=1.000(N0)
+  [q420] facts= 480 liquid=1.000 e5=1.000 s4=1.000 tfidf=1.000 tfidf_s4=1.000(N0)
+  [q430] facts= 521 liquid=0.000 e5=0.000 s4=0.000 tfidf=1.000 tfidf_s4=1.000(N0)
+  [q440] facts= 476 liquid=0.000 e5=0.000 s4=0.000 tfidf=1.000 tfidf_s4=1.000(N0)
+  [q450] facts= 454 liquid=0.000 e5=0.000 s4=0.000 tfidf=1.000 tfidf_s4=1.000(N0)
+  [q460] facts= 509 liquid=1.000 e5=1.000 s4=1.000 tfidf=1.000 tfidf_s4=1.000(N0)
+  [q470] facts= 475 liquid=1.000 e5=1.000 s4=1.000 tfidf=1.000 tfidf_s4=1.000(N0)
+  [q480] facts= 539 liquid=1.000 e5=0.000 s4=1.000 tfidf=1.000 tfidf_s4=1.000(N0)
+  [q490] facts= 516 liquid=1.000 e5=1.000 s4=1.000 tfidf=1.000 tfidf_s4=1.000(N0)
+  [q500] facts= 542 liquid=1.000 e5=1.000 s4=1.000 tfidf=1.000 tfidf_s4=1.000(N0)
+
+━━━ 汇总（500 QA 题 / 246738 条液态记忆）━━━
+mode            recall@K    hits  noise_topk     成核数
+none(无记忆)          0.000       0           -       -
+liquid(液环)         0.354     177           -    1426
+liquid+E5          0.346     173           -    1653
+s4(+20%噪声)         0.352     176           9    1426
+tfidf(向量基线)        0.942     471           -       -
+tfidf_s4(+噪声)      0.942     471           1       -
+
+注：成核数极低属预期（单遍会话流无重复）→ 印证 critique 边界；主战场=液态召回。
+tfidf 为**零依赖向量基线**（纯标准库，零 HF）：若 tfidf_s4 noise_topk>0 即证向量单条噪声入池弱点。
