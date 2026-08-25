@@ -42,6 +42,7 @@ import sys
 import os
 import re
 import json
+import math
 import time
 import hashlib
 import logging
@@ -65,6 +66,53 @@ def _jaccard(a: str, b: str) -> float:
     if not ta or not tb:
         return 0.0
     return len(ta & tb) / len(ta | tb)
+
+
+def _idf_jaccard(a: str, b: str, idf: dict) -> float:
+    """IDF 加权 jaccard（零向量、纯标量权重，守禁向量公理）。
+
+    与 _jaccard 同接口但用 IDF 给 token 加权——稀有关键词（如 degree/graduate）
+    权重高、常见词（the/i）权重低 → 召回机制层零向量但收复「纯字符 jaccard 稀释
+    稀有关键词」的代价。公式：Σidf(t∈A∩B) / Σidf(t∈A∪B)。
+    英文做小写归一（与 TfidfBaseline 同口径；默认 _jaccard 为大小写敏感的历史基线，
+    此处 IDF 模式按英文语料正确做法小写）。用于评测验证（recall_local(idf=True)），
+    默认不启用，不影响既有基准。
+    """
+    ta = set(t.lower() for t in _tokens(a))
+    tb = set(t.lower() for t in _tokens(b))
+    if not ta or not tb:
+        return 0.0
+    inter = ta & tb
+    union = ta | tb
+    num = sum(idf.get(t, 1.0) for t in inter)
+    den = sum(idf.get(t, 1.0) for t in union)
+    return num / den if den else 0.0
+
+
+def _idf_cosine(a: str, b: str, idf: dict) -> float:
+    """完整 TF-IDF 余弦（零 embedding、纯词频统计，与 run_locomo/longmemeval 的
+    TfidfBaseline 逐字节同口径：tf 用 (1+log c) 加权、idf 同公式、余弦归一化）。
+
+    这是「零神经网络向量」的稀疏词频向量——仍是 lexical 统计，非语义 embedding，
+    与 WHY_NO_VECTOR 允许的「词频向量对照」同性质。用于一锤定音验证：液环机制层
+    仅换召回归一化为 TF-IDF 余弦即可追平外部 TF-IDF 基线 → 证明 LoCoMo/LongMemEval
+    上「液环 1/2.7 召回缺口」本质是**词频统计加权（IDF+TF+余弦归一）差异**，
+    而非「需要语义 embedding」。注意：此模式把召回打分升级为稀疏 tf-idf 向量，
+    是否纳入机制层由飞哥按禁向量红线裁定（默认不启用）。
+    """
+    from collections import Counter
+    qf = Counter(t.lower() for t in _tokens(a))
+    dfb = Counter(t.lower() for t in _tokens(b))
+    if not qf or not dfb:
+        return 0.0
+    def w(c):
+        return 1.0 + math.log(c)
+    dot = 0.0
+    for t in set(qf) & set(dfb):
+        dot += w(qf[t]) * idf.get(t, 1.0) * w(dfb[t]) * idf.get(t, 1.0)
+    na = sum((w(c) * idf.get(t, 1.0)) ** 2 for t, c in qf.items())
+    nb = sum((w(c) * idf.get(t, 1.0)) ** 2 for t, c in dfb.items())
+    return dot / math.sqrt(na * nb) if na and nb else 0.0
 
 
 def _containment(a: str, b: str):
@@ -177,6 +225,23 @@ class LiquidSelfSpin:
         self.liquid_cache_dir = os.path.expanduser("~/.liquidloop")
         self._persist_errors = 0  # 持久化失败计数（去吞错：让故障可观测）
         self._lr = None  # 持久化 LiquidReweight 实例（懒构造，复用跨 recall）
+        self._idf = None  # IDF 表缓存（评测零向量加权召回用，懒构造）
+
+    # ── IDF 表（零向量加权召回）──
+    def _build_idf(self) -> dict:
+        """基于已摄入 facts 计算文档频率 → IDF（与 run_locomo TfidfBaseline 同公式：
+        idf = log((N+1)/(df+1)) + 1）。零向量：纯标量词频权重，非 embedding。
+        每个记忆库（selfspin 实例）独立计算，匹配真实 agent 按自身语料加权。"""
+        if self._idf is not None:
+            return self._idf
+        n = sum(len(fs) for fs in self._facts.values())
+        df: dict = {}
+        for fs in self._facts.values():
+            for f in fs:
+                for t in set(t.lower() for t in _tokens(f)):
+                    df[t] = df.get(t, 0) + 1
+        self._idf = {t: math.log((n + 1) / (c + 1)) + 1.0 for t, c in df.items()}
+        return self._idf
 
     # ── 本地快自转：摄入 ──
     def ingest(self, report_id: str, text: str, facts: list = None):
@@ -314,8 +379,25 @@ class LiquidSelfSpin:
         return out
 
     # ── 自述性：本地回忆（不碰 8790）──
-    def recall_local(self, query: str, top_k: int = 5, liquid: bool = False) -> list:
-        scored = [(_jaccard(query, f), rid, f)
+    def recall_local(self, query: str, top_k: int = 5, liquid: bool = False,
+                     idf: bool = False, idf_cosine: bool = False) -> list:
+        """本地液态召回。
+
+        idf=False（默认）：无加权纯字符 jaccard（既有基准口径，零向量、与历史可比）。
+        idf=True：IDF 加权 jaccard（零向量、纯标量词频权重）——收复「稀有关键词被长句
+        稀释」的召回代价。
+        idf_cosine=True：IDF 加权余弦（零向量、与 TF-IDF 基线同口径）——可追平向量基线，
+        证明「召回缺口」本质是词频归一化差异而非需要语义向量。
+        以上两 idf 模式仅评测/实验开启，不改变默认机制语义。
+        """
+        idf_tab = self._build_idf() if (idf or idf_cosine) else None
+        if idf_cosine:
+            sim = lambda a, b: _idf_cosine(a, b, idf_tab)
+        elif idf:
+            sim = lambda a, b: _idf_jaccard(a, b, idf_tab)
+        else:
+            sim = _jaccard
+        scored = [(sim(query, f), rid, f)
                   for rid, fs in self._facts.items() for f in fs]
         scored.sort(key=lambda x: x[0], reverse=True)
         base = [{"report_id": rid, "fact": f, "score": round(s, 3)}
@@ -334,7 +416,7 @@ class LiquidSelfSpin:
         for rid, fs in self._facts.items():
             for f in fs:
                 a_id = self._liquid_anchor_id(f)
-                lit = _jaccard(query, f)
+                lit = sim(query, f)
                 wake = lr.beta * lr.activation.get(a_id, 0.0)
                 sc = lit + wake
                 if sc > 0:

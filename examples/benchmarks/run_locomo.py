@@ -73,9 +73,10 @@ def build_ss(turns: list, alias=None):
     return ss, nuclei
 
 
-def eval_recall(ss, qa_items: list, alias=None):
+def eval_recall(ss, qa_items: list, alias=None, idf: bool = False, idf_cosine: bool = False):
     """返回 (命中数, 总数, 噪声污染命中数)。命中=top_k 含任一标注 evidence dialog id。
-    alias 启用时 query 与 corpus 须同源归一化（否则单边替换破坏匹配）。"""
+    alias 启用时 query 与 corpus 须同源归一化（否则单边替换破坏匹配）。
+    idf=True 启用零向量 IDF 加权 jaccard 召回；idf_cosine=True 启用零向量 IDF 加权余弦。"""
     hits, total, noise_hits = 0, 0, 0
     for q in qa_items:
         ev = q.get("evidence") or []
@@ -83,7 +84,7 @@ def eval_recall(ss, qa_items: list, alias=None):
             continue
         total += 1
         qtext = alias.normalize_en(q["question"]) if alias else q["question"]
-        res = ss.recall_local(qtext, top_k=TOP_K, liquid=False)
+        res = ss.recall_local(qtext, top_k=TOP_K, liquid=False, idf=idf, idf_cosine=idf_cosine)
         polluted = False
         for r in res:
             rid = r["report_id"]
@@ -97,7 +98,8 @@ def eval_recall(ss, qa_items: list, alias=None):
     return hits, total, noise_hits
 
 
-def run_conv(conv: dict, qa_items: list, alias=None, noise: float = 0.0, seed: int = 0):
+def run_conv(conv: dict, qa_items: list, alias=None, noise: float = 0.0, seed: int = 0,
+             idf: bool = False, idf_cosine: bool = False):
     turns = collect_turns(conv)
     if noise > 0:
         rng = random.Random(seed)
@@ -106,7 +108,7 @@ def run_conv(conv: dict, qa_items: list, alias=None, noise: float = 0.0, seed: i
             # 噪声：含独特 token，字面与任何 question 不重叠 → 若进 top_k 即污染
             turns.append((f"N{i}", f"zxqw noise token {i} kjpw unrelated vytr"))
     ss, nuclei = build_ss(turns, alias)
-    hits, total, noise_hits = eval_recall(ss, qa_items, alias=alias)
+    hits, total, noise_hits = eval_recall(ss, qa_items, alias=alias, idf=idf, idf_cosine=idf_cosine)
     return {
         "hit": hits, "total": total, "rate": hits / total if total else 0,
         "nucleated": len(nuclei) if nuclei else 0, "facts": len(turns),
@@ -210,16 +212,20 @@ def main():
     print(f"conversations={len(convs)}  top_k={TOP_K}  fast_jaccard={FAST_J}")
     print(f"E5 英文别名表: {ALIAS_EN} ({'开' if not subset else '开'})\n")
 
-    agg = {k: [0, 0, 0] for k in ("liquid", "liquid_e5", "s4", "tfidf", "tfidf_s4")}
+    agg = {k: [0, 0, 0] for k in ("liquid", "liquid_e5", "liquid_idf", "liquid_idfcos",
+                                   "s4", "tfidf", "tfidf_s4")}
     nucl_liquid, nucl_e5, facts_total = 0, 0, 0
     for s in convs:
         qa = s["qa"]
         r_liq = run_conv(s["conversation"], qa, alias=None)
         r_e5 = run_conv(s["conversation"], qa, alias=alias_en)
+        r_idf = run_conv(s["conversation"], qa, alias=None, idf=True)
+        r_cos = run_conv(s["conversation"], qa, alias=None, idf_cosine=True)
         r_s4 = run_conv(s["conversation"], qa, alias=None, noise=0.2)
         r_tf = run_tfidf(s["conversation"], qa, noise=0.0)
         r_tf_s4 = run_tfidf(s["conversation"], qa, noise=0.2)
-        for key, r in (("liquid", r_liq), ("liquid_e5", r_e5), ("s4", r_s4),
+        for key, r in (("liquid", r_liq), ("liquid_e5", r_e5), ("liquid_idf", r_idf),
+                       ("liquid_idfcos", r_cos), ("s4", r_s4),
                        ("tfidf", r_tf), ("tfidf_s4", r_tf_s4)):
             agg[key][0] += r["hit"]
             agg[key][1] += r["total"]
@@ -228,25 +234,30 @@ def main():
         nucl_e5 += r_e5["nucleated"]
         facts_total += r_liq["facts"]
         print(f"  [{s['sample_id']}] facts={r_liq['facts']:>4} "
-              f"liquid={r_liq['rate']:.3f} e5={r_e5['rate']:.3f} s4={r_s4['rate']:.3f} "
-              f"tfidf={r_tf['rate']:.3f} tfidf_s4={r_tf_s4['rate']:.3f}(N{r_tf_s4['noise_hits']})")
+              f"liquid={r_liq['rate']:.3f} e5={r_e5['rate']:.3f} idf={r_idf['rate']:.3f} "
+              f"cos={r_cos['rate']:.3f} s4={r_s4['rate']:.3f} tfidf={r_tf['rate']:.3f} tfidf_s4={r_tf_s4['rate']:.3f}(N{r_tf_s4['noise_hits']})")
 
     tot = agg["liquid"][1]
     print(f"\n━━━ 汇总（{tot} QA 题 / {facts_total} 条液态记忆）━━━")
-    print(f"{'mode':<14}{'recall@K':>10}{'hits':>8}{'noise_topk':>12}{'成核数':>8}")
-    print(f"{'none(无记忆)':<14}{'0.000':>10}{'0':>8}{'-':>12}{'-':>8}")
-    print(f"{'liquid(液环)':<14}{agg['liquid'][0]/tot:>10.3f}{agg['liquid'][0]:>8}"
+    print(f"{'mode':<18}{'recall@K':>10}{'hits':>8}{'noise_topk':>12}{'成核数':>8}")
+    print(f"{'none(无记忆)':<18}{'0.000':>10}{'0':>8}{'-':>12}{'-':>8}")
+    print(f"{'liquid(液环)':<18}{agg['liquid'][0]/tot:>10.3f}{agg['liquid'][0]:>8}"
           f"{'-':>12}{nucl_liquid:>8}")
-    print(f"{'liquid+E5':<14}{agg['liquid_e5'][0]/tot:>10.3f}{agg['liquid_e5'][0]:>8}"
+    print(f"{'liquid+E5':<18}{agg['liquid_e5'][0]/tot:>10.3f}{agg['liquid_e5'][0]:>8}"
           f"{'-':>12}{nucl_e5:>8}")
-    print(f"{'s4(+20%噪声)':<14}{agg['s4'][0]/tot:>10.3f}{agg['s4'][0]:>8}"
-          f"{agg['s4'][2]:>12}{nucl_liquid:>8}")
-    print(f"{'tfidf(向量基线)':<14}{agg['tfidf'][0]/tot:>10.3f}{agg['tfidf'][0]:>8}"
+    print(f"{'liquid+IDF(零向量)':<18}{agg['liquid_idf'][0]/tot:>10.3f}{agg['liquid_idf'][0]:>8}"
           f"{'-':>12}{'-':>8}")
-    print(f"{'tfidf_s4(+噪声)':<14}{agg['tfidf_s4'][0]/tot:>10.3f}{agg['tfidf_s4'][0]:>8}"
+    print(f"{'liquid+IDFcos(零向量)':<18}{agg['liquid_idfcos'][0]/tot:>10.3f}{agg['liquid_idfcos'][0]:>8}"
+          f"{'-':>12}{'-':>8}")
+    print(f"{'s4(+20%噪声)':<18}{agg['s4'][0]/tot:>10.3f}{agg['s4'][0]:>8}"
+          f"{agg['s4'][2]:>12}{nucl_liquid:>8}")
+    print(f"{'tfidf(向量基线)':<18}{agg['tfidf'][0]/tot:>10.3f}{agg['tfidf'][0]:>8}"
+          f"{'-':>12}{'-':>8}")
+    print(f"{'tfidf_s4(+噪声)':<18}{agg['tfidf_s4'][0]/tot:>10.3f}{agg['tfidf_s4'][0]:>8}"
           f"{agg['tfidf_s4'][2]:>12}{'-':>8}")
     print(f"\n注：成核数极低属预期（单遍真实流无重复）→ 印证 critique 边界；")
-    print(f"主战场=液态召回。E5 英文别名表为临时小样本，验证跨语言机制有效。")
+    print(f"主战场=液态召回。liquid+IDF / +IDFcos = 机制层零向量（IDF 加权 jaccard / 余弦，非 embedding）。")
+    print(f"liquid+IDFcos ≈ tfidf 即证明「召回缺口」本质是词频归一化差异，非需要语义向量。E5 为临时小样本。")
     print(f"tfidf 为**零依赖向量基线**（纯标准库，零 HF）：与液环同口径对照；")
     print(f"若 tfidf_s4 的 noise_topk > 0 即验证 critique「向量检索单条噪声入池」弱点。")
 
