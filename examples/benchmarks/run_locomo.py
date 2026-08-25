@@ -15,9 +15,13 @@
   - 成核数：local_rotate 产出的≥2 篇支持 canonical 数（预期极低，作边界证据）
   - S4 污染率：注入噪声 turn 后，top_k 中噪声占比（抗噪不退化度量）
 
-公理纪律：纯 jaccard / 倒排，零 embedding、零向量、零 LLM 推断。
+公理纪律（液环**内部机制**）：纯 jaccard / 倒排，零 embedding、零向量、零 LLM 推断。
+  selfspin / 成核 / 液态召回全程零向量 —— 这是 WHY_NO_VECTOR 的禁向量红线所在层。
+  TfidfBaseline 是**外部评测对照基线**（非液环内部机制），与 WHY_NO_VECTOR.md 自身建的
+  V1/V2/V3 向量 baseline 同性质；它量化"若用语义向量检索会怎样"，不进入 liquid_loop/ 包，
+  故**不破禁向量红线**（红线在机制层，不在评测对照层）。
 基线对照：none(无记忆=0) / liquid(液环 jaccard) / liquid_e5(液环+英文别名表) /
-          s4(液环+20%噪声) / tfidf(零依赖TF-IDF向量基线) / tfidf_s4(向量基线+20%噪声)
+          s4(液环+20%噪声) / tfidf(零依赖TF-IDF向量基线·外部对照) / tfidf_s4(向量基线+20%噪声)
 
 用法：
   LOCOMO_SUBSET=1 python3 examples/benchmarks/run_locomo.py   # 单对话快速验证管线
