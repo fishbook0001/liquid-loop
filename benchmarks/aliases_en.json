@@ -1,0 +1,20 @@
+{
+  "alias_map": {
+    "cell phone": ["phone", "mobile", "mobile phone"],
+    "children": ["kids"],
+    "mother": ["mom", "mum"],
+    "father": ["dad"],
+    "apartment": ["flat"],
+    "automobile": ["car"],
+    "dog": ["puppy", "pet dog"],
+    "cat": ["kitten", "pet cat"],
+    "birthday": ["bday"],
+    "university": ["college", "uni"],
+    "vacation": ["holiday"],
+    "movie": ["film"],
+    "show": ["tv show", "series"],
+    "girlfriend": ["girlfriend", "partner"],
+    "boyfriend": ["boyfriend", "partner"]
+  },
+  "term_norm": {}
+}

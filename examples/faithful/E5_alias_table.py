@@ -95,6 +95,23 @@ class AliasTable:
             t = t.replace(variant, canon)
         return _normalize(t)
 
+    def normalize_en(self, text: str) -> str:
+        """英文友好归一化：alias/term 替换 + 小写 + 去标点但**保留词间空格**。
+
+        区别于 normalize（中文式去空格 _normalize）：英文靠空格分词，
+        去空格会使整句塌成单个超长 token → jaccard 交集为空。
+        实测 LoCoMo（英文）上 normalize 导致 recall 全盘 0；本方法修复该英文边界。
+        中文 term_norm（embedding→嵌入）在纯英文文本不触发，无副作用。"""
+        t = text or ""
+        for term, canon in self._term_rules:
+            t = t.replace(term, canon)
+        for variant, canon in self._alias_rules:
+            t = t.replace(variant, canon)
+        t = t.lower()
+        t = re.sub(r"[^a-z0-9\s]", " ", t)
+        t = re.sub(r"\s+", " ", t).strip()
+        return t
+
     def trace(self, text: str) -> dict:
         """可解释回溯：记录本条归一化触发了哪些规则（merged_via）。"""
         applied = []

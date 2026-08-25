@@ -31,3 +31,6 @@ Thumbs.db
 upload_pypi.py
 *.tar.gz
 *.zip
+
+# Benchmark datasets (download from upstream, not committed)
+benchmarks/data/
