@@ -36,6 +36,7 @@
 ### D4 · 合并层保守加固
 - 保持显式 principle 合并；**自动合并否决**（受控实验已证）。
 - 突破"用词不重叠"合并盲区 → 需非字面通道（LLM 辅助/外部知识），且**必须过同门受控实验**才准上生产（标记 D4-experimental）。
+- **E5 在飞（D4-experimental 确定性实现，非 LLM）**：`examples/faithful/E5_alias_table.py` 用确定性别名表 + 术语归一化（纯字符串替换、零 embedding）补零 token 重叠同义洞；selfspin 主干未改、成核 ≥2 门未降。实验验证 pass；真实语义流报告（LoCoMo/LongMemEval，见 D1）待跑。上生产前仍须过同门受控实验（误合并率评估）。
 
 ### D5 · 生态与工程
 - v1.8.0 推送 + GitHub Release + README/description 补全。

@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased — E5 非 embedding 同义归并（实验 · examples/faithful）
+
+- **E5_alias_table.py + E5_alias_table_proposal.md**（实验模块，未入核心包）：承接外部 critique 指出的"禁向量真阿喀琉斯之踵 = 语义逃逸（零 token 重叠同义 → 0 核 → 事实流失）"。
+  - `AliasTable`：确定性别名表 + 术语归一化（embedding→嵌入 / vector→向量），**零 embedding、零 LLM 推断、纯字符串替换**。
+  - 集成点：在 `LiquidSelfSpin.ingest` 前对 fact 跑 `AliasTable.normalize` → 同义变体统一成同一 canonical 串 → `local_rotate` 自然聚核（selfspin 主干一字未改，不污染生产）。
+  - 公理守住：别名归并只降"识别同义"成本，**不降 ≥2 distinct source 成核门**；归并可回溯 `merged_via`。
+  - 验收（E5_alias_table.py 实跑）：盲区补洞（零 token 重叠同义别名命中后成核，原 0 核）✓ / 抗噪不退化（单条 S4 噪声仍不成核）✓ / 术语归一跨表述归并 ✓。
+  - **状态**：实验验证 pass；真实语义流报告（LoCoMo/LongMemEval）待跑（见 ROADMAP）。未 bump 版号、未发版。
+
 ## v2.0.0 (2026-08-24) — 液环统一版号里程碑（1.9.0→2.0.0）
 
 - **版本统一**：`pyproject.toml` / `liquid_loop/__init__.__version__` / `textutil._get_version` 回退默认 / 投喂客户端 `feed_liquidloop` 全部对齐 `2.0.0`。
