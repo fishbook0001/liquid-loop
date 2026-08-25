@@ -16,7 +16,8 @@
   - S4 污染率：注入噪声 turn 后，top_k 中噪声占比（抗噪不退化度量）
 
 公理纪律：纯 jaccard / 倒排，零 embedding、零向量、零 LLM 推断。
-基线对照：none(无记忆=0) / liquid(液环 jaccard) / liquid_e5(液环+英文别名表) / s4(液环+20%噪声)
+基线对照：none(无记忆=0) / liquid(液环 jaccard) / liquid_e5(液环+英文别名表) /
+          s4(液环+20%噪声) / tfidf(零依赖TF-IDF向量基线) / tfidf_s4(向量基线+20%噪声)
 
 用法：
   LOCOMO_SUBSET=1 python3 examples/benchmarks/run_locomo.py   # 单对话快速验证管线
@@ -25,6 +26,8 @@
 import sys
 import os
 import json
+import re
+import math
 import random
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -107,6 +110,93 @@ def run_conv(conv: dict, qa_items: list, alias=None, noise: float = 0.0, seed: i
     }
 
 
+class TfidfBaseline:
+    """零依赖 TF-IDF + 余弦向量基线（纯标准库，零 embedding / 零 HF / 零 LLM）。
+    用于对照：向量检索范式下「单条噪声是否入池」——这正是 critique 指出的向量弱点。"""
+    def __init__(self, ids: list, docs: list):
+        self.ids = ids
+        self.tok = lambda s: re.findall(r"[a-z0-9]+", s.lower())
+        df = {}
+        self.doc_tok = [self.tok(d) for d in docs]
+        for toks in self.doc_tok:
+            for w in set(toks):
+                df[w] = df.get(w, 0) + 1
+        n = len(docs)
+        self.idf = {w: math.log((n + 1) / (c + 1)) + 1 for w, c in df.items()}
+        self.vecs = []
+        for toks in self.doc_tok:
+            tf = {}
+            for w in toks:
+                tf[w] = tf.get(w, 0) + 1
+            v = {}
+            norm = 0.0
+            for w, c in tf.items():
+                val = (1 + math.log(c)) * self.idf.get(w, 1.0)
+                v[w] = val
+                norm += val * val
+            self.vecs.append((v, math.sqrt(norm) or 1.0))
+
+    def query(self, q: str, k: int = 5):
+        tf = {}
+        for w in self.tok(q):
+            tf[w] = tf.get(w, 0) + 1
+        qv = {}
+        qn = 0.0
+        for w, c in tf.items():
+            val = (1 + math.log(c)) * self.idf.get(w, 1.0)
+            qv[w] = val
+            qn += val * val
+        qn = math.sqrt(qn) or 1.0
+        scored = []
+        for i, (v, norm) in enumerate(self.vecs):
+            dot = 0.0
+            if len(qv) <= len(v):
+                for w, val in qv.items():
+                    if w in v:
+                        dot += val * v[w]
+            else:
+                for w, val in v.items():
+                    if w in qv:
+                        dot += qv[w] * val
+            cos = dot / (qn * norm) if norm > 0 else 0.0
+            scored.append((i, cos))
+        scored.sort(key=lambda x: -x[1])
+        return [(self.ids[i], cos) for i, cos in scored[:k]]
+
+
+def run_tfidf(conv: dict, qa_items: list, noise: float = 0.0, seed: int = 0):
+    """TF-IDF 向量基线跑单对话（与 liquid 同口径：turn→记忆，question→召回）。"""
+    turns = collect_turns(conv)
+    if noise > 0:
+        rng = random.Random(seed)
+        n = int(len(turns) * noise)
+        for i in range(n):
+            turns.append((f"N{i}", f"zxqw noise token {i} kjpw unrelated vytr"))
+    ids = [t[0] for t in turns]
+    docs = [t[1] for t in turns]
+    idx = TfidfBaseline(ids, docs)
+    hits, total, noise_hits = 0, 0, 0
+    for q in qa_items:
+        ev = q.get("evidence") or []
+        if not ev:
+            continue
+        total += 1
+        top = idx.query(q["question"], TOP_K)
+        polluted = False
+        for rid, _ in top:
+            if rid.startswith("N"):
+                polluted = True
+            if rid in ev:
+                hits += 1
+                break
+        if polluted:
+            noise_hits += 1
+    return {
+        "hit": hits, "total": total, "rate": hits / total if total else 0,
+        "noise_hits": noise_hits, "facts": len(turns),
+    }
+
+
 def main():
     data = json.load(open(DATA))
     alias_en = E5.AliasTable(path=ALIAS_EN)
@@ -116,14 +206,17 @@ def main():
     print(f"conversations={len(convs)}  top_k={TOP_K}  fast_jaccard={FAST_J}")
     print(f"E5 英文别名表: {ALIAS_EN} ({'开' if not subset else '开'})\n")
 
-    agg = {k: [0, 0, 0] for k in ("liquid", "liquid_e5", "s4")}  # hit, total, noise_hits
+    agg = {k: [0, 0, 0] for k in ("liquid", "liquid_e5", "s4", "tfidf", "tfidf_s4")}
     nucl_liquid, nucl_e5, facts_total = 0, 0, 0
     for s in convs:
         qa = s["qa"]
         r_liq = run_conv(s["conversation"], qa, alias=None)
         r_e5 = run_conv(s["conversation"], qa, alias=alias_en)
         r_s4 = run_conv(s["conversation"], qa, alias=None, noise=0.2)
-        for key, r in (("liquid", r_liq), ("liquid_e5", r_e5), ("s4", r_s4)):
+        r_tf = run_tfidf(s["conversation"], qa, noise=0.0)
+        r_tf_s4 = run_tfidf(s["conversation"], qa, noise=0.2)
+        for key, r in (("liquid", r_liq), ("liquid_e5", r_e5), ("s4", r_s4),
+                       ("tfidf", r_tf), ("tfidf_s4", r_tf_s4)):
             agg[key][0] += r["hit"]
             agg[key][1] += r["total"]
             agg[key][2] += r["noise_hits"]
@@ -131,21 +224,27 @@ def main():
         nucl_e5 += r_e5["nucleated"]
         facts_total += r_liq["facts"]
         print(f"  [{s['sample_id']}] facts={r_liq['facts']:>4} "
-              f"liquid_rate={r_liq['rate']:.3f} e5_rate={r_e5['rate']:.3f} "
-              f"s4_rate={r_s4['rate']:.3f} s4_noise_topk={r_s4['noise_hits']}/{r_s4['total']}")
+              f"liquid={r_liq['rate']:.3f} e5={r_e5['rate']:.3f} s4={r_s4['rate']:.3f} "
+              f"tfidf={r_tf['rate']:.3f} tfidf_s4={r_tf_s4['rate']:.3f}(N{r_tf_s4['noise_hits']})")
 
     tot = agg["liquid"][1]
     print(f"\n━━━ 汇总（{tot} QA 题 / {facts_total} 条液态记忆）━━━")
-    print(f"{'mode':<12}{'recall@K':>10}{'hits':>8}{'noise_topk':>12}{'成核数':>8}")
-    print(f"{'none(无记忆)':<12}{'0.000':>10}{'0':>8}{'-':>12}{'-':>8}")
-    print(f"{'liquid(液环)':<12}{agg['liquid'][0]/tot:>10.3f}{agg['liquid'][0]:>8}"
+    print(f"{'mode':<14}{'recall@K':>10}{'hits':>8}{'noise_topk':>12}{'成核数':>8}")
+    print(f"{'none(无记忆)':<14}{'0.000':>10}{'0':>8}{'-':>12}{'-':>8}")
+    print(f"{'liquid(液环)':<14}{agg['liquid'][0]/tot:>10.3f}{agg['liquid'][0]:>8}"
           f"{'-':>12}{nucl_liquid:>8}")
-    print(f"{'liquid+E5':<12}{agg['liquid_e5'][0]/tot:>10.3f}{agg['liquid_e5'][0]:>8}"
+    print(f"{'liquid+E5':<14}{agg['liquid_e5'][0]/tot:>10.3f}{agg['liquid_e5'][0]:>8}"
           f"{'-':>12}{nucl_e5:>8}")
-    print(f"{'s4(+20%噪声)':<12}{agg['s4'][0]/tot:>10.3f}{agg['s4'][0]:>8}"
+    print(f"{'s4(+20%噪声)':<14}{agg['s4'][0]/tot:>10.3f}{agg['s4'][0]:>8}"
           f"{agg['s4'][2]:>12}{nucl_liquid:>8}")
+    print(f"{'tfidf(向量基线)':<14}{agg['tfidf'][0]/tot:>10.3f}{agg['tfidf'][0]:>8}"
+          f"{'-':>12}{'-':>8}")
+    print(f"{'tfidf_s4(+噪声)':<14}{agg['tfidf_s4'][0]/tot:>10.3f}{agg['tfidf_s4'][0]:>8}"
+          f"{agg['tfidf_s4'][2]:>12}{'-':>8}")
     print(f"\n注：成核数极低属预期（单遍真实流无重复）→ 印证 critique 边界；")
     print(f"主战场=液态召回。E5 英文别名表为临时小样本，验证跨语言机制有效。")
+    print(f"tfidf 为**零依赖向量基线**（纯标准库，零 HF）：与液环同口径对照；")
+    print(f"若 tfidf_s4 的 noise_topk > 0 即验证 critique「向量检索单条噪声入池」弱点。")
 
 
 if __name__ == "__main__":
