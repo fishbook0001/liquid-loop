@@ -251,6 +251,7 @@ class LiquidSelfSpin:
         持久化失败静默降级（观测增强非关键路径，极致稳态：主流程不受拖累）。
         """
         self._raw[report_id] = text
+        self._idf = None  # facts 将被改写 → 使已建 IDF 表失效（默认余弦召回依赖它）
         self._facts[report_id] = list(facts) if facts is not None else self.extractor(text)
         if self.liquid_persist:
             try:
@@ -380,15 +381,16 @@ class LiquidSelfSpin:
 
     # ── 自述性：本地回忆（不碰 8790）──
     def recall_local(self, query: str, top_k: int = 5, liquid: bool = False,
-                     idf: bool = False, idf_cosine: bool = False) -> list:
+                     idf: bool = False, idf_cosine: bool = True) -> list:
         """本地液态召回。
 
-        idf=False（默认）：无加权纯字符 jaccard（既有基准口径，零向量、与历史可比）。
-        idf=True：IDF 加权 jaccard（零向量、纯标量词频权重）——收复「稀有关键词被长句
-        稀释」的召回代价。
-        idf_cosine=True：IDF 加权余弦（零向量、与 TF-IDF 基线同口径）——可追平向量基线，
-        证明「召回缺口」本质是词频归一化差异而非需要语义向量。
-        以上两 idf 模式仅评测/实验开启，不改变默认机制语义。
+        **默认 idf_cosine=True**：零向量 tf-idf 余弦（IDF+TF+余弦归一，纯词频标量权重，
+        非 embedding）作为召回归一化。与 LoCoMo/LongMemEval 的 TF-IDF 基线逐字节同口径，
+        在两者上精确追平词频向量基线——收复「纯字符 jaccard 稀释稀有关键词」的召回代价，
+        全程零 embedding、零语义向量，守禁向量公理（WHY_NO_VECTOR §六）。
+        idf=False 且 idf_cosine=False：回退到无加权纯字符 jaccard（历史 v1 基准口径，
+        仍保留用于对照，但非默认）。
+        idf=True：IDF 加权 jaccard（零向量，纯标量权重）——idf_cosine 优先时不生效。
         """
         idf_tab = self._build_idf() if (idf or idf_cosine) else None
         if idf_cosine:

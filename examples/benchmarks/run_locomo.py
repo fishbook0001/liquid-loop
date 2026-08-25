@@ -212,53 +212,54 @@ def main():
     print(f"conversations={len(convs)}  top_k={TOP_K}  fast_jaccard={FAST_J}")
     print(f"E5 英文别名表: {ALIAS_EN} ({'开' if not subset else '开'})\n")
 
-    agg = {k: [0, 0, 0] for k in ("liquid", "liquid_e5", "liquid_idf", "liquid_idfcos",
-                                   "s4", "tfidf", "tfidf_s4")}
-    nucl_liquid, nucl_e5, facts_total = 0, 0, 0
+    # 机制默认列 = liquid（零向量 IDF 余弦）。liquid_jaccard 为 v1 历史口径对照。
+    agg = {k: [0, 0, 0] for k in ("liquid", "liquid_jaccard", "liquid_e5",
+                                   "liquid_idf", "s4", "tfidf", "tfidf_s4")}
+    nucl_jac, nucl_e5, facts_total = 0, 0, 0
     for s in convs:
         qa = s["qa"]
-        r_liq = run_conv(s["conversation"], qa, alias=None)
-        r_e5 = run_conv(s["conversation"], qa, alias=alias_en)
-        r_idf = run_conv(s["conversation"], qa, alias=None, idf=True)
-        r_cos = run_conv(s["conversation"], qa, alias=None, idf_cosine=True)
-        r_s4 = run_conv(s["conversation"], qa, alias=None, noise=0.2)
+        r_liq = run_conv(s["conversation"], qa, alias=None, idf_cosine=True)      # 机制默认
+        r_jac = run_conv(s["conversation"], qa, alias=None, idf_cosine=False)     # 纯 jaccard v1
+        r_e5 = run_conv(s["conversation"], qa, alias=alias_en, idf_cosine=False)   # E5 英文
+        r_idf = run_conv(s["conversation"], qa, alias=None, idf=True, idf_cosine=False)
+        r_s4 = run_conv(s["conversation"], qa, alias=None, noise=0.2, idf_cosine=True)
         r_tf = run_tfidf(s["conversation"], qa, noise=0.0)
         r_tf_s4 = run_tfidf(s["conversation"], qa, noise=0.2)
-        for key, r in (("liquid", r_liq), ("liquid_e5", r_e5), ("liquid_idf", r_idf),
-                       ("liquid_idfcos", r_cos), ("s4", r_s4),
+        for key, r in (("liquid", r_liq), ("liquid_jaccard", r_jac), ("liquid_e5", r_e5),
+                       ("liquid_idf", r_idf), ("s4", r_s4),
                        ("tfidf", r_tf), ("tfidf_s4", r_tf_s4)):
             agg[key][0] += r["hit"]
             agg[key][1] += r["total"]
             agg[key][2] += r["noise_hits"]
-        nucl_liquid += r_liq["nucleated"]
+        nucl_jac += r_jac["nucleated"]
         nucl_e5 += r_e5["nucleated"]
         facts_total += r_liq["facts"]
         print(f"  [{s['sample_id']}] facts={r_liq['facts']:>4} "
-              f"liquid={r_liq['rate']:.3f} e5={r_e5['rate']:.3f} idf={r_idf['rate']:.3f} "
-              f"cos={r_cos['rate']:.3f} s4={r_s4['rate']:.3f} tfidf={r_tf['rate']:.3f} tfidf_s4={r_tf_s4['rate']:.3f}(N{r_tf_s4['noise_hits']})")
+              f"liquid={r_liq['rate']:.3f} jac={r_jac['rate']:.3f} e5={r_e5['rate']:.3f} "
+              f"idf={r_idf['rate']:.3f} s4={r_s4['rate']:.3f} tfidf={r_tf['rate']:.3f} tfidf_s4={r_tf_s4['rate']:.3f}(N{r_tf_s4['noise_hits']})")
 
     tot = agg["liquid"][1]
     print(f"\n━━━ 汇总（{tot} QA 题 / {facts_total} 条液态记忆）━━━")
-    print(f"{'mode':<18}{'recall@K':>10}{'hits':>8}{'noise_topk':>12}{'成核数':>8}")
-    print(f"{'none(无记忆)':<18}{'0.000':>10}{'0':>8}{'-':>12}{'-':>8}")
-    print(f"{'liquid(液环)':<18}{agg['liquid'][0]/tot:>10.3f}{agg['liquid'][0]:>8}"
-          f"{'-':>12}{nucl_liquid:>8}")
-    print(f"{'liquid+E5':<18}{agg['liquid_e5'][0]/tot:>10.3f}{agg['liquid_e5'][0]:>8}"
+    print(f"{'mode':<22}{'recall@K':>10}{'hits':>8}{'noise_topk':>12}{'成核数':>8}")
+    print(f"{'none(无记忆)':<22}{'0.000':>10}{'0':>8}{'-':>12}{'-':>8}")
+    print(f"{'liquid(默认·零向量余弦)':<22}{agg['liquid'][0]/tot:>10.3f}{agg['liquid'][0]:>8}"
+          f"{'-':>12}{'-':>8}")
+    print(f"{'liquid_jaccard(v1对照)':<22}{agg['liquid_jaccard'][0]/tot:>10.3f}{agg['liquid_jaccard'][0]:>8}"
+          f"{'-':>12}{nucl_jac:>8}")
+    print(f"{'liquid+E5(英文玩具)':<22}{agg['liquid_e5'][0]/tot:>10.3f}{agg['liquid_e5'][0]:>8}"
           f"{'-':>12}{nucl_e5:>8}")
-    print(f"{'liquid+IDF(零向量)':<18}{agg['liquid_idf'][0]/tot:>10.3f}{agg['liquid_idf'][0]:>8}"
+    print(f"{'liquid+IDF(jaccard加权)':<22}{agg['liquid_idf'][0]/tot:>10.3f}{agg['liquid_idf'][0]:>8}"
           f"{'-':>12}{'-':>8}")
-    print(f"{'liquid+IDFcos(零向量)':<18}{agg['liquid_idfcos'][0]/tot:>10.3f}{agg['liquid_idfcos'][0]:>8}"
+    print(f"{'s4(+20%噪声·默认)':<22}{agg['s4'][0]/tot:>10.3f}{agg['s4'][0]:>8}"
+          f"{agg['s4'][2]:>12}{'-':>8}")
+    print(f"{'tfidf(词频向量基线)':<22}{agg['tfidf'][0]/tot:>10.3f}{agg['tfidf'][0]:>8}"
           f"{'-':>12}{'-':>8}")
-    print(f"{'s4(+20%噪声)':<18}{agg['s4'][0]/tot:>10.3f}{agg['s4'][0]:>8}"
-          f"{agg['s4'][2]:>12}{nucl_liquid:>8}")
-    print(f"{'tfidf(向量基线)':<18}{agg['tfidf'][0]/tot:>10.3f}{agg['tfidf'][0]:>8}"
-          f"{'-':>12}{'-':>8}")
-    print(f"{'tfidf_s4(+噪声)':<18}{agg['tfidf_s4'][0]/tot:>10.3f}{agg['tfidf_s4'][0]:>8}"
+    print(f"{'tfidf_s4(+噪声)':<22}{agg['tfidf_s4'][0]/tot:>10.3f}{agg['tfidf_s4'][0]:>8}"
           f"{agg['tfidf_s4'][2]:>12}{'-':>8}")
     print(f"\n注：成核数极低属预期（单遍真实流无重复）→ 印证 critique 边界；")
-    print(f"主战场=液态召回。liquid+IDF / +IDFcos = 机制层零向量（IDF 加权 jaccard / 余弦，非 embedding）。")
-    print(f"liquid+IDFcos ≈ tfidf 即证明「召回缺口」本质是词频归一化差异，非需要语义向量。E5 为临时小样本。")
-    print(f"tfidf 为**零依赖向量基线**（纯标准库，零 HF）：与液环同口径对照；")
+    print(f"主战场=液态召回。liquid(默认) = 机制层零向量 IDF 余弦（IDF+TF+余弦，非 embedding）。")
+    print(f"liquid(默认) ≈ tfidf 即证明「召回缺口」本质是词频归一化差异，非需要语义向量。E5 为临时小样本。")
+    print(f"tfidf 为**零依赖词频向量基线**（纯标准库，零 HF）：与液环同口径对照；")
     print(f"若 tfidf_s4 的 noise_topk > 0 即验证 critique「向量检索单条噪声入池」弱点。")
 
 

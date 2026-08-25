@@ -1,0 +1,31 @@
+━━━ LoCoMo benchmark · 液环存活度 ━━━
+conversations=10  top_k=5  fast_jaccard=0.6
+E5 英文别名表: /Users/feixubuke/liquid-loop/benchmarks/aliases_en.json (开)
+
+  [conv-26] facts= 419 liquid=0.421 jac=0.127 e5=0.132 idf=0.228 s4=0.411 tfidf=0.421 tfidf_s4=0.411(N3)
+  [conv-30] facts= 369 liquid=0.524 jac=0.238 e5=0.210 idf=0.390 s4=0.495 tfidf=0.524 tfidf_s4=0.495(N4)
+  [conv-41] facts= 663 liquid=0.487 jac=0.145 e5=0.150 idf=0.316 s4=0.472 tfidf=0.487 tfidf_s4=0.472(N12)
+  [conv-42] facts= 629 liquid=0.473 jac=0.219 e5=0.223 idf=0.335 s4=0.465 tfidf=0.473 tfidf_s4=0.465(N17)
+  [conv-43] facts= 680 liquid=0.508 jac=0.240 e5=0.252 idf=0.380 s4=0.488 tfidf=0.508 tfidf_s4=0.488(N10)
+  [conv-44] facts= 675 liquid=0.411 jac=0.196 e5=0.190 idf=0.272 s4=0.405 tfidf=0.411 tfidf_s4=0.405(N7)
+  [conv-47] facts= 689 liquid=0.421 jac=0.184 e5=0.195 idf=0.332 s4=0.416 tfidf=0.421 tfidf_s4=0.416(N25)
+  [conv-48] facts= 681 liquid=0.531 jac=0.243 e5=0.255 idf=0.381 s4=0.527 tfidf=0.531 tfidf_s4=0.527(N18)
+  [conv-49] facts= 509 liquid=0.526 jac=0.219 e5=0.230 idf=0.367 s4=0.515 tfidf=0.526 tfidf_s4=0.515(N8)
+  [conv-50] facts= 568 liquid=0.411 jac=0.183 e5=0.203 idf=0.302 s4=0.406 tfidf=0.411 tfidf_s4=0.406(N8)
+
+━━━ 汇总（1982 QA 题 / 5882 条液态记忆）━━━
+mode                    recall@K    hits  noise_topk     成核数
+none(无记忆)                  0.000       0           -       -
+liquid(默认·零向量余弦)           0.472     936           -       -
+liquid_jaccard(v1对照)       0.200     397           -     540
+liquid+E5(英文玩具)            0.207     410           -     465
+liquid+IDF(jaccard加权)      0.331     656           -       -
+s4(+20%噪声·默认)              0.462     915         112       -
+tfidf(词频向量基线)              0.472     936           -       -
+tfidf_s4(+噪声)              0.462     915         112       -
+
+注：成核数极低属预期（单遍真实流无重复）→ 印证 critique 边界；
+主战场=液态召回。liquid(默认) = 机制层零向量 IDF 余弦（IDF+TF+余弦，非 embedding）。
+liquid(默认) ≈ tfidf 即证明「召回缺口」本质是词频归一化差异，非需要语义向量。E5 为临时小样本。
+tfidf 为**零依赖词频向量基线**（纯标准库，零 HF）：与液环同口径对照；
+若 tfidf_s4 的 noise_topk > 0 即验证 critique「向量检索单条噪声入池」弱点。
