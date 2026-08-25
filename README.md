@@ -4,6 +4,8 @@
 
 > **Self-Organizing Cognitive Memory for AI Agents** — Zero LLM dependency, pure Python implementation of the Liquid Loop theory.
 
+> **当前包版本：`2.0.0`**（2026-08-24 统一版号里程碑，详见 [CHANGELOG.md](CHANGELOG.md)。数据 schema `0.4.0` 与 workspace state `0.5.1` 为记忆层数据格式版本，独立于包发布版本）。
+
 [![PyPI](https://img.shields.io/pypi/v/liquid-loop.svg)](https://pypi.org/project/liquid-loop/)
 [![Python](https://img.shields.io/pypi/pyversions/liquid-loop.svg)](https://pypi.org/project/liquid-loop/)
 [![License](https://img.shields.io/pypi/l/liquid-loop.svg)](https://opensource.org/licenses/MIT)
@@ -81,9 +83,9 @@ RED    (entropy ≥ 0.6)  — 需清理
 
 ---
 
-## v0.8 反证轨 + 时间动力学（液态循环核心）
+## 核心机制：反证轨 + 时间动力学（液态循环核心）
 
-液环 v0.8 从"静态结晶"升级为**自调节记忆动力学**：记忆不是对象，而是过程。
+液环从"静态结晶"升级为**自调节记忆动力学**：记忆不是对象，而是过程。以下机制均随 **v2.0.0** 发布（历史演进中曾标 v0.8 / v0.9）。
 
 ### 反证轨（Contradiction Track）
 
@@ -325,11 +327,12 @@ pytest -v
 ## 路线图
 
 - [ ] 多 Agent 液环耦合（`liquid_loop.mesh` 已移除，见 commit ac7260e）
-- [x] **[v0.8] 反证轨（Evidence Graph）**：Evidence 分 support / contradiction，一致增稳、冲突降稳，驱动 memory stability score（不再"一致即真"）
-- [x] **[v0.8] 显式时间动力学**：`M(t+1) = M(t) + reinforcement − decay − contradiction_penalty`，让记忆成为"过程"而非"对象"（真正的液态循环）
-- [x] **[v0.8] 三实验全 PASS**：E2 错误记忆恢复 → E3 多 agent 冲突 → E1 长期漂移（见上节）
-- [x] **[v0.9] 冲突检测 O(g²)→O(d²)**：`_detect_conflicts` 按 content 去重后只对 distinct 内容求两两重叠（d≤g），overlap_cache 复用；语义更纯净（度量不同论点分歧），大规模高频写入性能提升（非正确性变更）
-- [x] **[v0.9] 液态算法正式落地**：时间动力学 / 反证轨 / 双轨成核在 v0.8 已实现并经 E1/E2/E3 三实验背书，v0.9 作为稳定版正式发布（README 顶部 Hero Banner 已上线）
+- [x] **[已发布] 反证轨（Evidence Graph）**：Evidence 分 support / contradiction，一致增稳、冲突降稳，驱动 memory stability score（不再"一致即真"）
+- [x] **[已发布] 显式时间动力学**：`M(t+1) = M(t) + reinforcement − decay − contradiction_penalty`，让记忆成为"过程"而非"对象"（真正的液态循环）
+- [x] **[已发布] 三实验全 PASS**：E2 错误记忆恢复 → E3 多 agent 冲突 → E1 长期漂移（见上节）
+- [x] **[已发布] 冲突检测 O(g²)→O(d²)**：`_detect_conflicts` 按 content 去重后只对 distinct 内容求两两重叠（d≤g），overlap_cache 复用；语义更纯净（度量不同论点分歧），大规模高频写入性能提升（非正确性变更）
+- [x] **[已发布] 液态算法正式落地**：时间动力学 / 反证轨 / 双轨成核经 E1/E2/E3 三实验背书，作为稳定机制随 **v2.0.0** 发布
+- [x] **[v2.0.0] 统一版号里程碑**：`pyproject.toml` / `__init__.__version__` / 投喂客户端 `LIQUIDLOOP_CLIENT_VERSION` 全部对齐 `2.0.0`；数据 schema `0.4.0` 与 workspace state `0.5.1` 保持独立（记忆层格式版本，禁区不动）
 - [ ] LoCoMo / LongMemEval 基准对比
 - [ ] 边缘端部署优化（<50KB）
 
