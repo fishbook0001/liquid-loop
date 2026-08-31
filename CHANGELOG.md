@@ -1,5 +1,13 @@
 # Changelog
 
+## v2.0.3 (2026-08-31) — 版本号统一+重复进程清理（2.0.2→2.0.3）
+
+- **版本号统一修复**：核心库（liquid-loop）与8790部署服务（marvis_memory）版本号对齐。此前8790服务因启动时缓存旧模块，/health返回2.0.1而核心库已升级到2.0.2，重启服务后统一为2.0.3。
+- **重复进程清理**：发现8790端口存在两个重复服务进程（PID 1090从11:11AM启动、PID 97217从6:17PM启动），均监听8790导致资源浪费和潜在冲突。清理后保留单一launchd守护进程（KeepAlive=true）。
+- **launchd配置确认**：`com.marvis.memory.liquidloop.plist`配置正确，PYTHONPATH指向`/Users/feixubuke/liquid-loop`，HardMemoryLimit=1GB，RunAtLoad+KeepAlive确保服务高可用。
+- **测试全绿**：199 passed, 0 failed。
+
+
 ## v2.0.2 (2026-08-31) — 安全护栏+引用完整性+反绝对化检测（2.0.1→2.0.2）
 
 - **灾难性回退护栏**（`storage.py` StateRegressionGuardError）：save() 落盘前正对照磁盘全量，若传入态相对磁盘全量灾难性缩水（<10%）则拒绝落盘，保留磁盘态+CRITICAL审计。根治"部分内存态原子覆盖全量磁盘态"静默失效族。小工作区（<50条）冷启动放行。
