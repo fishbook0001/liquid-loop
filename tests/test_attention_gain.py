@@ -64,17 +64,21 @@ def test_contradiction_preserved():
 
 
 def test_no_support_no_bonus():
-    """无 support 证据的 memory（content 不匹配其 evidence）→ attn_bonus=0，不凭空升稳。"""
+    """无 content 匹配支撑但有引用支撑的 memory → attn_bonus=0，不凭空升稳；stability=0.5（v2.0.2引用即支撑）。"""
     s = WorkspaceState()
     a = Anchor(name="孤立锚点")
     s.anchors.append(a)
-    # 加一条与本 memory content 无关的 evidence，使 memory 进入 anchor_memories 但 supports 为空
+    # 加一条与本 memory content 无关的 evidence，使 memory 进入 anchor_memories 但 content 匹配为空
     e = s.add_evidence(a.id, "无关内容XYZ", agent_id="A")
     m = Memory(content="无支撑记忆", evidence_ids=[e.id])
     s.memories.append(m)
     s._update_memory_stability(a.id)
     assert m.attn_bonus == 0.0
-    assert m.stability == 0.0  # s=0,c=0 → 0/(0+1)=0
+    # v2.0.2 手动成核回退：引用即支撑（e.id in m.evidence_ids）
+    # 即使content不匹配，evidence_ids指向支撑证据也计为support
+    # s=1,c=0 → 1/(1+0+1)=0.5
+    assert m.stability == 0.5
+    assert m.support_count == 1
 
 
 def test_register_recall_archived_no_boost():

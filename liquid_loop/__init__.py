@@ -1,11 +1,11 @@
 """Liquid Loop — Workspace Cognitive Runtime v2.0.1 (禁向量·活态液态神经网络：成核门槛/反证轨/老化回收/原理优先成核/因果演化/软取代supersede+治理查询state_at/impact/duplicates+程序性记忆层procedural_memory+PerceptionGate因果共生门控)"""
-__version__ = "2.0.1"
+__version__ = "2.0.2"
 
 from .workspace import (
     WorkspaceState, Anchor, Evidence, Memory, Conflict,
     AuditChain, CPERegularizer, SelfRefineEngine,
 )
-from .storage import load, save, locked_state
+from .storage import load, save, locked_state, StateRegressionGuardError
 from .entropy import calculate, calculate_detail, calculate as calculate_entropy
 from .selfspin import LiquidSelfSpin
 from .liquid_reweight import LiquidReweight
@@ -16,7 +16,8 @@ from .procedural_memory import (
     ProceduralMemory, ProceduralRegistry, procmem_recall, procmem_admit,
 )
 # 蒸馏落地的公共原语（零侵入，供 cli / server / agent loop 接入）
-from .guard import should_escalate, confirm_gate, CapabilityMenu
+from .guard import should_escalate, confirm_gate, CapabilityMenu, PerceptionGate
+from .dsh_reversible import ReversibleRegistry  # 可逆副作用底座（蒸馏 DeepSeek Harness #204，2026-08-28 接活）
 from .session import SessionState, mark_abort, recover, save_session, load_session
 from .recall_filter import adaptive_recall
 from .rar import RARIndex, build_or_cache  # 公共检索 API（原 workspace 局部 import）

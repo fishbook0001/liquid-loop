@@ -34,6 +34,45 @@ def validate_content(content: str) -> str | None:
     return None
 
 
+# ── 反绝对化词表（m60 DeepTutor 借鉴落地 · 2026-08-29）──
+# DeepTutor 训练师提示词要求"避免绝对化、过度自信表述"（不/不要/绝不/总是/完全/彻底/
+# 专家/热爱/恨 等），并配引用池约束（结论必须能锚定到已蒸馏引文）。
+# 液环落地为「警告级」检测：只标记、不拒绝——液环允许主体自由表达，但把过度概括
+# 显式暴露给写入方（og_flags），供上层蒸馏/内化时复核真实性，而非静默放行。
+OVERGEN_TERMS: tuple[tuple[str, str], ...] = (
+    # (命中词, 类别)
+    ("总是", "absolute"), ("从来不", "absolute"), ("从不", "absolute"), ("永远", "absolute"),
+    ("所有", "absolute"), ("全部", "absolute"), ("一切", "absolute"), ("任何", "absolute"),
+    ("完全", "absolute"), ("彻底", "absolute"), ("绝对", "absolute"), ("一定", "absolute"),
+    ("必须", "prescriptive"), ("禁止", "prescriptive"), ("绝不", "absolute"),
+    ("专家", "claim"), ("大师", "claim"), ("完美", "claim"), ("精通", "claim"),
+    ("热爱", "claim"), ("深爱", "claim"), ("憎恨", "claim"), ("讨厌", "claim"),
+    ("always", "absolute"), ("never", "absolute"), ("every", "absolute"),
+    ("all", "absolute"), ("none", "absolute"), ("completely", "absolute"),
+    ("totally", "absolute"), ("absolutely", "absolute"), ("perfectly", "claim"),
+    ("expert", "claim"), ("master", "claim"), ("perfect", "claim"),
+    ("love", "claim"), ("hate", "claim"), ("passion", "claim"),
+    ("fully understands", "claim"), ("deeply", "claim"), ("truly", "claim"),
+)
+
+
+def overgeneralization_flags(content: str) -> list[dict]:
+    """反绝对化词表检测（m60 建议2 落地）：返回命中的过度概括表述。
+
+    返回 [{term, category}]，按出现顺序去重；无命中返回 []。
+    只标记不拒绝（警告级）：液环允许自由表达，但显式暴露给上层复核。
+    零依赖，纯规则，与 validate_content 同一风格。
+    """
+    c = (content or "").lower()
+    flags: list[dict] = []
+    seen: set = set()
+    for term, cat in OVERGEN_TERMS:
+        if term in c and term not in seen:
+            seen.add(term)
+            flags.append({"term": term, "category": cat})
+    return flags
+
+
 def should_escalate(confidence: float = 1.0, irreversible: bool = False,
                     over_budget: bool = False) -> bool:
     """升级刹车：命中任一红线即交回人。低置信 ∨ 不可逆 ∨ 超预算。
@@ -98,14 +137,17 @@ class PerceptionGate:
              超预算时按当前认知负载决定 degrade（省算力）还是 allow（精度优先）。
           4) build_or_cache（rar 本地索引缓存）→ 本地算力溶解「重建索引」成本，
              使高载降级 skip 无后顾之忧（详见测试 test_perception_gate.py）。
+          5) env_anchor_probe（v3.2 环境锚时效门，可选）→ 涉及环境类断言的动作
+             使用前强制重取证（curl/ps/ipconfig/hostname 正对照），返回 stale 即 block，
+             把"认知基线纪律"升为机制强制步；无注入则跳过（零影响）。
 
-    零依赖：真实因果边 / 负载来自 liquid-loop 的 workspace / recall_filter / rar，
-    由 adapter 注入（causal_core_predicate / load_probe），不在本模块 import 重型依赖。
-    这样门控成为「可配置策略」，而非把整套液环塞进门里的膨胀方案。
+    零依赖：真实因果边 / 负载 / 环境锚重取证来自 liquid-loop 的 workspace / recall_filter / rar
+    或调用方注入，由 adapter 注入（causal_core_predicate / load_probe / env_anchor_probe），
+    不在本模块 import 重型依赖。这样门控成为「可配置策略」，而非把整套液环塞进门里的膨胀方案。
     """
 
     def __init__(self, budget: float = 1.0, sensitivity: str = "normal",
-                 causal_core_predicate=None, load_probe=None):
+                 causal_core_predicate=None, load_probe=None, env_anchor_probe=None):
         self.budget = float(budget)
         self.sensitivity = sensitivity
         self._spent = 0.0
@@ -113,6 +155,8 @@ class PerceptionGate:
         self.causal_core_predicate = causal_core_predicate or (lambda action: False)
         # 默认负载探测器：无注入时返回 0.0（低载，精度优先路径）
         self.load_probe = load_probe or (lambda: 0.0)
+        # v3.2 环境锚时效门：无注入时返回 None（跳过，零影响现有门）
+        self.env_anchor_probe = env_anchor_probe
 
     def decide(self, action, cost: float = 0.0, confidence: float = 1.0,
                irreversible: bool = False) -> dict:
@@ -123,6 +167,19 @@ class PerceptionGate:
           - allow    : 放行（因果核心豁免 / 正常 / 低载精度优先）。
           - degrade  : 超预算 + 高载 → 降采样 / 跳过，省算力；不消耗预算。
         """
+        # 0) v3.2 环境锚时效门（最高优先）：涉及环境类断言须先重取证，stale 即拦截
+        if self.env_anchor_probe is not None:
+            try:
+                _ap = self.env_anchor_probe(action)
+            except Exception:
+                _ap = None  # 重取证异常 fail-open，不误伤（零爆破半径）
+            if _ap is True or (isinstance(_ap, dict) and _ap.get("stale")):
+                return {
+                    "decision": "block",
+                    "reason": f"环境锚时效门: 须重取证 ({_ap.get('detail','') if isinstance(_ap, dict) else ''})",
+                    "env_anchor_stale": True,
+                }
+
         # 1) 不可逆变 + 低置信 → 交回人（should_escalate 红线）
         if should_escalate(confidence=confidence, irreversible=irreversible):
             return {
@@ -172,3 +229,96 @@ class PerceptionGate:
     def remaining(self) -> float:
         """剩余预算。"""
         return self.budget - self._spent
+
+
+# ── 评估准则：延迟跃变防误判（m69 过度递归衰减 + m65 世界模型自演化 蒸馏落地 · 2026-08-29）──
+# 自演化系统最危险的评估错误是「过早判失败」：机制的效果常表现为延迟跃变
+# （先震荡/持平，积累到阈值后跳变），若在跃变前按短期指标关停，就永远等不到
+# 跃变。本准则供上层评测门控（如 SoMEval 接入的评估门）作为独立校验函数使用：
+# 对某机制给出「是否继续运行」建议时，先检查评估窗口是否足以覆盖延迟跃变期。
+EVAL_MIN_WINDOW_DAYS = 7      # 机制效果最小评估窗口（天）
+EVAL_RECENCY_WEIGHT = 0.5     # 近端窗口权重阈值：近端占比过高说明评估窗口过短
+
+
+def eval_patience_check(
+    history: list[dict] | None = None,
+    window_days: float = EVAL_MIN_WINDOW_DAYS,
+    recency_weight: float = EVAL_RECENCY_WEIGHT,
+) -> dict:
+    """评估准则：防「过早判失败」的延迟跃变检查。
+
+    入参 history: [{"ts": 秒级时间戳, "metric": float}, ...]（按时间升序）。
+    无历史/历史过短 → 返回 verdict="insufficient"（建议延长窗口再判）。
+    返回:
+      {
+        "verdict": "ok" | "insufficient" | "too_short_window",
+        "reason": str,
+        "window_days": float,        # 覆盖的实际时间跨度（天）
+        "recency_ratio": float | None,  # 近 1/3 窗口指标占整体比重（不稳定时显式暴露）
+        "trend": "rising"|"flat"|"declining"|"unknown",
+      }
+    设计要点（蒸馏自 m69 过度递归衰减 / m65 世界模型自演化）：
+      - 机制的自演化收益是延迟跃变而非线性累积 → 评估窗口必须覆盖跃变期；
+      - 近端比重过高 = 评估窗口过短，直接建议延长而非判失败；
+      - 本函数只做「评估是否充分」的裁决，不代替业务指标计算，保持零依赖纯函数。
+    """
+    if not history or len(history) < 3:
+        return {
+            "verdict": "insufficient",
+            "reason": "评估历史不足(需≥3个采样点)，无法判断延迟跃变",
+            "window_days": 0.0,
+            "recency_ratio": None,
+            "trend": "unknown",
+        }
+    try:
+        ts0 = float(history[0]["ts"])
+        ts1 = float(history[-1]["ts"])
+        span_days = (ts1 - ts0) / 86400.0
+    except (KeyError, TypeError, ValueError):
+        return {
+            "verdict": "insufficient",
+            "reason": "历史采样点缺 ts/metric 字段，无法计算评估窗口",
+            "window_days": 0.0,
+            "recency_ratio": None,
+            "trend": "unknown",
+        }
+    if span_days < window_days:
+        return {
+            "verdict": "too_short_window",
+            "reason": f"评估窗口 {span_days:.1f} 天 < 建议最小 {window_days} 天，延迟跃变未到观察期，禁止判失败",
+            "window_days": span_days,
+            "recency_ratio": None,
+            "trend": "unknown",
+        }
+    # 近端 1/3 采样点指标均值 vs 整体均值：近端占比过高 → 窗口仍在跃变爬升期
+    n = len(history)
+    recent = history[max(0, n - max(1, n // 3)):]
+    try:
+        avg_all = sum(float(h["metric"]) for h in history) / n
+        avg_recent = sum(float(h["metric"]) for h in recent) / len(recent)
+        ratio = (avg_recent / avg_all) if avg_all else 1.0
+    except (KeyError, TypeError, ValueError):
+        ratio = None
+    trend = "unknown"
+    if ratio is not None:
+        if ratio > 1.05:
+            trend = "rising"
+        elif ratio < 0.95:
+            trend = "declining"
+        else:
+            trend = "flat"
+    if ratio is not None and ratio > (1.0 + recency_weight):
+        return {
+            "verdict": "too_short_window",
+            "reason": f"近端指标占比 {ratio:.2f} 过高(>1+{recency_weight})，机制处于跃变爬升期，须延长窗口",
+            "window_days": span_days,
+            "recency_ratio": ratio,
+            "trend": trend,
+        }
+    return {
+        "verdict": "ok",
+        "reason": f"评估窗口 {span_days:.1f} 天覆盖延迟跃变期，可正常评估",
+        "window_days": span_days,
+        "recency_ratio": ratio,
+        "trend": trend,
+    }

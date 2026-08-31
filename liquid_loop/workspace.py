@@ -605,9 +605,22 @@ class WorkspaceState:
                 a.recalc_strength(evidence_count)
                 a.auto_classify(evidence_count)
 
-    def add_memory(self, content: str, evidence_ids: list[str] | None = None) -> Memory:
-        """添加一条记忆结晶"""
-        m = Memory(id=uid(), content=content, evidence_ids=evidence_ids or [])
+    def add_memory(self, content: str, evidence_ids: list[str] | None = None,
+                   validate_refs: bool = True) -> Memory | None:
+        """添加一条记忆结晶。
+
+        v2.0.2 修复：增加 evidence_ids 存在性校验（validate_refs=True 默认开启），
+        防止创建引用不存在 evidence 的孤儿记忆（历史根因：marvis fact batch 45条
+        占位记忆引用了675条不存在的 evidence_id，导致引用完整性仅49.1%）。
+        校验失败返回 None，不创建记忆。如需绕过校验（如先建记忆后补证据），传 validate_refs=False。
+        """
+        eids = evidence_ids or []
+        if validate_refs and eids:
+            existing = {e.id for e in self.evidences}
+            missing = [eid for eid in eids if eid not in existing]
+            if missing:
+                return None
+        m = Memory(id=uid(), content=content, evidence_ids=eids)
         self.memories.append(m)
         self.updated_at = now()
         return m
@@ -644,7 +657,8 @@ class WorkspaceState:
             supports = [e for e in group
                         if e.relation in ("support", "")
                         and (e.content == m.content
-                             or (m.principle_grounded and e.principle == m.content))]
+                             or (m.principle_grounded and e.principle == m.content)
+                             or e.id in m.evidence_ids)]  # v2.0.2 手动成核回退：引用即支撑（ll_crystallize 的摘要 content 与证据原始 content 不逐字匹配，但 evidence_ids 明确指向支撑证据）
             if m.id:
                 contradicts = [e for e in group
                                if e.relation == "contradiction"
@@ -1050,6 +1064,10 @@ class WorkspaceState:
                 anchor = next((a for a in self.anchors if a.id == e.anchor_id), None)
                 if anchor is not None:
                     cat = anchor.name
+                # v1.1 evidence 层加 category 过滤（修复：原实现 evidence 层完全不过滤 category，
+                #      导致 POST /list?category=X 返回 agent_id 的全部 evidence 而非 X 类）
+                if category and category != "(结晶)" and cat != category:
+                    continue
                 out.append({
                     "memory_id": e.id,
                     "type": "evidence",
@@ -1058,6 +1076,7 @@ class WorkspaceState:
                     "agent_id": e.agent_id,
                 })
         for m in self.memories:
+            # memory 层：category 为空或 "(结晶)" 时返回；其他 category 值只过滤 evidence 层
             if category and category != "(结晶)":
                 continue
             if m.scope == "consensus":

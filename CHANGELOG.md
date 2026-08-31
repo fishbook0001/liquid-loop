@@ -1,5 +1,19 @@
 # Changelog
 
+## v2.0.2 (2026-08-31) — 安全护栏+引用完整性+反绝对化检测（2.0.1→2.0.2）
+
+- **灾难性回退护栏**（`storage.py` StateRegressionGuardError）：save() 落盘前正对照磁盘全量，若传入态相对磁盘全量灾难性缩水（<10%）则拒绝落盘，保留磁盘态+CRITICAL审计。根治"部分内存态原子覆盖全量磁盘态"静默失效族。小工作区（<50条）冷启动放行。
+- **写前快照轮转**（`storage.py` undo机制）：save() 前自动创建 state.json 快照，保留最近10份（约17M），支持灾难性回退恢复。
+- **evidence_ids 存在性校验**（`workspace.py` add_memory validate_refs）：创建记忆时默认校验 evidence_ids 全部存在，防止孤儿记忆（历史根因：marvis fact batch 45条占位记忆引用675条不存在evidence_id，引用完整性仅49.1%）。校验失败返回 None，如需绕过传 validate_refs=False。
+- **手动成核回退：引用即支撑**（`workspace.py` _update_memory_stability）：ll_crystallize 的摘要 content 与证据原始 content 不逐字匹配时，通过 evidence_ids 明确指向的支撑证据计为 support（`e.id in m.evidence_ids`），修复手动成核后 stability=0 的问题。
+- **反绝对化词表检测**（`guard.py` overgeneralization_flags）：m60 DeepTutor 借鉴落地，检测"总是/从不/一切/完美/专家"等过度概括表述，返回 [{term, category}]，只标记不拒绝（警告级），供上层蒸馏/内化时复核真实性。中英双语40+词。
+- **PerceptionGate 环境锚时效门**（`guard.py` env_anchor_probe）：v3.2 可选注入，涉及环境类断言的动作使用前强制重取证（curl/ps/ipconfig/hostname 正对照），返回 stale 即 block，把"认知基线纪律"升为机制强制步。无注入则跳过（零影响现有门）。
+- **可逆副作用底座**（`dsh_reversible.py` ReversibleRegistry）：蒸馏 DeepSeek Harness #204，记录可回滚操作（文件写入/进程启动/配置修改），支持 undo/redo，零LLM依赖。
+- **多键召回**（`recall_multi_key.py`）：支持多关键词组合召回，提升复杂查询召回率。
+- **测试修复**：`test_attention_gain.py::test_no_support_no_bonus` 更新预期以匹配 v2.0.2 引用即支撑新行为（s=1,c=0 → stability=0.5）。
+- **测试全绿**：199 passed, 0 failed。
+
+
 ## v2.0.1 (2026-08-25) — 零向量召回超越词频基线（2.0.0→2.0.1）
 
 - **默认召回升级为「零向量 tf-idf 余弦 + 实体/数字精确加权 booster」**（`selfspin.recall_local(idf_cosine=True, lexical_boost=True)`）。

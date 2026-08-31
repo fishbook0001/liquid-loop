@@ -1,5 +1,7 @@
 import json
 import os
+import shutil
+import time
 from pathlib import Path
 from dataclasses import asdict
 from .workspace import (
@@ -12,6 +14,8 @@ LIQUID_DIR = ".liquid"
 STATE_FILE = "state.json"
 AUDIT_FILE = "audit.log"
 ARCHIVE_FILE = "archive.jsonl"
+UNDO_DIR = "undo"
+UNDO_KEEP = 10  # 写前快照轮转保留份数（state.json 1.7M×10 ≈ 17M，可接受）
 
 
 def _ensure_dir(workspace_root: Path) -> Path:
@@ -86,10 +90,123 @@ def load(workspace_root: Path) -> WorkspaceState:
     return _from_dict(data)
 
 
+# ── 灾难性回退护栏（2026-08-29 根治 · 飞哥"先治本"）────────
+# 静默失效族根治：部分内存态(近似空)一旦传进 save() 会原子覆盖全量磁盘态，
+# 且因原子写"文件不半截"而难以察觉。本护栏在落盘前正对照磁盘全量，
+# 若传入态相对磁盘全量灾难性缩水则拒绝落盘(保留磁盘 + CRITICAL 审计)，
+# 使"全量被部分态覆盖"成为不可能事件。必须在 evict_expired/归档压实 之前调用，
+# 使 archived 项仍计入传入态, 避免误拦合法归档。
+GUARD_MIN = 50        # 磁盘全量低于此值不拦(冷启动/小工作区)
+GUARD_RATIO = 0.1     # 传入态 < 磁盘*此比例 → 判定灾难性回退
+
+class StateRegressionGuardError(Exception):
+    """save() 拒绝灾难性状态回退时抛出；磁盘态保持不变。"""
+
+def _state_total(state) -> int:
+    return len(state.anchors) + len(state.evidences) + len(state.memories)
+
+def _guard_regression(state, workspace_root):
+    """落盘前置护栏: 拒绝把全量磁盘态覆盖成近似空态。返回 None=通过。
+
+    触发时: 写 CRITICAL 审计 + 抛 StateRegressionGuardError(磁盘不变)。
+    仅在磁盘全量 >= GUARD_MIN 时启用, 小工作区/冷启动放行。"""
+    try:
+        disk = load(workspace_root)
+    except Exception:
+        return  # 读不到磁盘(如首次写) → 不拦
+    disk_total = _state_total(disk)
+    if disk_total < GUARD_MIN:
+        return  # 小工作区/冷启动 → 不拦
+    incoming_total = _state_total(state)
+    if incoming_total < disk_total * GUARD_RATIO:
+        try:
+            get_audit_chain(workspace_root).append(
+                "state_save_guard_BLOCKED",
+                f"incoming={incoming_total}_disk={disk_total}_ratio={incoming_total/disk_total:.4f}")
+        except Exception:
+            pass
+        raise StateRegressionGuardError(
+            f"refuse catastrophic state regression: incoming={incoming_total} < "
+            f"{GUARD_RATIO}*disk={disk_total} (disk preserved; see undo snapshot)")
+
+
+# ── undo checkpoint（m60 建议3 落地 · 2026-08-29）──
+# DeepTutor 的 undo checkpoint 借鉴：每次写前把当前 state.json 快照到
+# .liquid/undo/undo-<ts>.json（轮转保留 UNDO_KEEP 份），配合 list_undo /
+# restore_undo 提供「后悔药」。与审计链（audit.log 哈希链）互补：
+# 审计链证明"发生过什么"，undo 栈允许"回到某次写之前"。
+
+
+def _undo_dir(workspace_root: Path) -> Path:
+    d = _ensure_dir(workspace_root) / UNDO_DIR
+    d.mkdir(exist_ok=True)
+    return d
+
+
+def _snapshot_before_save(workspace_root: Path) -> str | None:
+    """写前快照：把当前 state.json 复制为 undo-<ts>.json，轮转清理旧份。
+
+    返回快照时间戳；无现存 state.json（首次写）或复制失败返回 None。
+    由 save() 在覆盖前调用（save 持有锁，快照与覆盖天然串行）。
+    """
+    src = _ensure_dir(workspace_root) / STATE_FILE
+    if not src.exists():
+        return None
+    # 微秒级唯一（macOS strftime 不支持 %f，手工拼微秒），避免同秒多次写互相覆盖快照
+    ts = time.strftime("%Y%m%d%H%M%S") + f"{int(time.time() * 1_000_000) % 1_000_000:06d}"
+    dst = _undo_dir(workspace_root) / f"undo-{ts}.json"
+    try:
+        shutil.copy2(src, dst)
+    except OSError:
+        return None  # 快照失败不阻断写（fail-open，零爆破半径）
+    # 轮转：仅保留最近 UNDO_KEEP 份
+    snaps = sorted(_undo_dir(workspace_root).glob("undo-*.json"))
+    for old in snaps[:-UNDO_KEEP]:
+        try:
+            old.unlink()
+        except OSError:
+            pass
+    return ts
+
+
+def list_undo(workspace_root: Path) -> list[dict]:
+    """列出可用写前快照（按时间倒序），供上层展示/选择恢复点。"""
+    out = []
+    for p in sorted(_undo_dir(workspace_root).glob("undo-*.json"), reverse=True):
+        try:
+            sz = p.stat().st_size
+        except OSError:
+            sz = 0
+        out.append({"ts": p.stem.replace("undo-", ""), "path": str(p), "bytes": sz})
+    return out
+
+
+def restore_undo(workspace_root: Path, ts: str) -> dict:
+    """把指定写前快照恢复为当前 state.json（覆盖式，自动先快照当前态）。
+
+    安全：恢复前先对当前状态做一次写前快照（后悔药套后悔药）；全程持文件锁，
+    与 locked_state 串行，杜绝并发丢写。ts 取 list_undo 返回的时间戳（容错 yyyyMMddHHmmss）。
+    """
+    snap = _undo_dir(workspace_root) / f"undo-{ts}.json"
+    if not snap.exists():
+        return {"ok": False, "error": f"快照不存在: {ts}（可用 list_undo 查看）"}
+    with _file_lock(str(_lock_path(workspace_root)), "w"):
+        # 1) 先快照当前态（若有）
+        cur_ts = _snapshot_before_save(workspace_root)
+        # 2) 覆盖恢复
+        dst = _ensure_dir(workspace_root) / STATE_FILE
+        shutil.copy2(snap, dst)
+        return {"ok": True, "restored_ts": ts, "previous_snapshot": cur_ts}
+
+
 def save(state: WorkspaceState, workspace_root: Path):
-    """原子写（temp+rename）：崩溃永不留下半截文件。锁由 locked_state 持有。"""
+    """原子写（temp+rename）：崩溃永不留下半截文件。锁由 locked_state 持有。
+    前置护栏 _guard_regression：拒绝灾难性回退(部分态覆盖全量)，见 storage 根治段。"""
     state.updated_at = now()
+    _guard_regression(state, workspace_root)  # 根治：部分态静默覆盖全量 → 拒绝, 保留磁盘
     path = _ensure_dir(workspace_root) / STATE_FILE
+    # m60 建议3 落地：写前快照（undo checkpoint），覆盖前保留当前态后悔药
+    _snapshot_before_save(workspace_root)
     # 审计链：记录并回写哈希
     audit = get_audit_chain(workspace_root)
     audit_hash = audit.append("state_save",
