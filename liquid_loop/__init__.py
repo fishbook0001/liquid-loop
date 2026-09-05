@@ -1,5 +1,5 @@
 """Liquid Loop — Workspace Cognitive Runtime v2.0.1 (禁向量·活态液态神经网络：成核门槛/反证轨/老化回收/原理优先成核/因果演化/软取代supersede+治理查询state_at/impact/duplicates+程序性记忆层procedural_memory+PerceptionGate因果共生门控)"""
-__version__ = "2.0.3"
+__version__ = "2.0.4"
 
 from .workspace import (
     WorkspaceState, Anchor, Evidence, Memory, Conflict,
@@ -23,3 +23,10 @@ from .recall_filter import adaptive_recall
 from .rar import RARIndex, build_or_cache  # 公共检索 API（原 workspace 局部 import）
 # TTL 回收入口：evict_expired 是 WorkspaceState 实例方法（见 workspace.py:254），
 # 已随 WorkspaceState 一并导出；cli.prune 经 state.evict_expired() 调用。
+
+# 5大洞察工程落地（2026-09-02 基于自主学习D527-D546批次蒸馏提炼）
+from .generative_recall import GenerativeRecall, generative_recall  # 洞察一：生成式记忆检索
+from .hebbian_association import HebbianAssociation, update_hebbian_associations  # 洞察二：赫布关联引擎
+from .regeneration_metrics import RegenerationMetrics, check_regeneration_health  # 洞察三：记忆再生抗衰
+from .dual_engine_monitor import DualEngineMonitor, dual_engine_monitor_decision  # 洞察四：双引擎监控
+# 洞察五：LNN设计原则文档见 docs/LNN_DESIGN_PRINCIPLES.md

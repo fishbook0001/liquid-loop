@@ -6,18 +6,112 @@ from .textutil import (
     _dissolve_votes_path, _load_dissolve_votes, _save_dissolve_votes,
 )
 from .entropy import calculate
+import os
+import sys
 
 class CPERegularizer:
-    """CPE 正则化引擎：在证据添加前做能力保留裁决"""
+    """CPE 正则化引擎：在证据添加前做能力保留裁决
 
-    def __init__(self, state: WorkspaceState):
+    v2.3 补强（2026-09-01）：
+    - P3: 场景感知（learning/normal），学习模式下阈值动态放宽
+    - P4: EVOLVE灰色空间并发上限（默认5条），防膨胀
+    - 阈值随场景动态调整，不再硬编码
+
+    v2.2 优化（2026-09-01）：
+    - P0: 漂移评分区分"漂移"与"演化"，增加方向一致性检查
+    - P1: 新增EVOLVE动作，临时写入+观察期，给新洞察试错空间
+    - P2: 保护权重上限从1.0降到0.5，方向一致的新内容保护权重再降70%
+    """
+
+    # 场景阈值配置：learning模式更宽松（允许更多演化），normal模式用默认
+    _THRESHOLDS = {
+        "normal": {"block": 0.7, "evolve": 0.7, "flag": 0.4},
+        "learning": {"block": 0.85, "evolve": 0.55, "flag": 0.30},
+    }
+
+    def __init__(self, state: WorkspaceState, mode: str = ""):
         self.state = state
+        # P3: 场景感知——从环境变量读取，默认normal；learning模式用于军师调研/自主学习等批量新知识注入场景
+        self.mode = (mode or os.environ.get("LIQUID_CPE_MODE", "normal")).lower()
+        if self.mode not in self._THRESHOLDS:
+            self.mode = "normal"
+        # P4: EVOLVE灰色空间并发上限——防膨胀，默认5条，可环境变量配置
+        self.evolve_max = int(os.environ.get("LIQUID_CPE_EVOLVE_MAX", "5"))
 
-    def evaluate_new_evidence(self, anchor: Anchor, new_content: str) -> Dict[str, Any]:
+    def _get_thresholds(self) -> dict:
+        """P3: 根据当前场景返回动态阈值（不再硬编码）"""
+        return self._THRESHOLDS.get(self.mode, self._THRESHOLDS["normal"])
+
+    def _count_active_evolve(self) -> int:
+        """P4: 统计当前处于观察期的EVOLVE证据数量（灰色空间占用量）"""
+        count = 0
+        for e in getattr(self.state, "evidences", []):
+            if getattr(e, "evolve_status", "") == "observing":
+                # 检查是否已过期（过期的不算占用）
+                observe_until = getattr(e, "evolve_observe_until", "")
+                if observe_until:
+                    try:
+                        from datetime import datetime, timezone
+                        if datetime.fromisoformat(observe_until.replace("Z", "+00:00")) > datetime.now(timezone.utc):
+                            count += 1
+                            continue
+                    except (ValueError, TypeError) as _e:
+                        sys.stderr.write(f"[cpe:warn] evolve_observe_until日期解析失败: {_e}\n")
+                count += 1
+        return count
+
+    def _calc_direction_consistency(self, anchor: Anchor, new_content: str, category: str = "") -> float:
+        """P0: 计算新内容与锚点核心方向的一致性（0.0~1.0）
+
+        v2.2.1修复：原算法用anchor.name/description的关键词重叠，
+        但锚点name是自动生成的元数据（如"principle"），与实际内容几乎无重叠，
+        导致direction_consistency恒≈0.02，EVOLVE通道永不触发。
+
+        修复后：
+        1. category匹配是方向一致性的最强信号——用户写入时指定category，
+           本身就是在声明"这条内容属于这个方向"。category匹配→0.8
+        2. 锚点核心关键词（从现有证据提取的高频词）重叠→补充信号
+        3. 两者取最大值
+        """
+        # 信号1：category匹配（最强信号）
+        if category and anchor.name:
+            if category.lower() == anchor.name.lower() or category.lower() in anchor.name.lower():
+                return 0.8
+
+        # 信号2：从锚点下现有证据提取核心关键词，计算重叠
+        direction_keywords = set()
+        if hasattr(anchor, 'evidence_ids') and anchor.evidence_ids:
+            # 从state中获取该锚点的证据，提取高频词
+            evs = [e for e in self.state.evidences if e.anchor_id == anchor.id and e.content]
+            if evs:
+                # 简单词频：取所有证据中出现频率最高的前20个词
+                from collections import Counter
+                word_freq = Counter()
+                for ev in evs[:20]:  # 最多看20条，避免计算量过大
+                    words = _tokenize(ev.content)
+                    word_freq.update(words)
+                # 取频率>1的词作为核心关键词
+                direction_keywords = {w for w, c in word_freq.most_common(30) if c > 1}
+
+        if direction_keywords:
+            new_words = set(_tokenize(new_content))
+            overlap = len(new_words & direction_keywords) / max(len(direction_keywords), 1)
+            return min(0.7, overlap * 3)  # 放大系数，因为核心关键词本身就少
+
+        # 兜底：用anchor.name/description
+        direction_text = " ".join(filter(None, [
+            anchor.name or "",
+            anchor.description or "",
+        ]))
+        if not direction_text:
+            return 0.5
+        return _keyword_overlap(new_content, direction_text)
+
+    def evaluate_new_evidence(self, anchor: Anchor, new_content: str, category: str = "") -> Dict[str, Any]:
         """评估新证据对既有锚点体系的能力侵蚀风险（CPE §3 Regularized Self-Evolution Objective）
 
         返回:
-            action: "PASS" | "BLOCK" | "FLAG"
+            action: "PASS" | "BLOCK" | "FLAG" | "EVOLVE" | "MERGE"
             score: 0.0(安全) ~ 1.0(高风险)
             reasons: 原因列表
         """
@@ -34,8 +128,21 @@ class CPERegularizer:
         max_overlap = max(overlaps) if overlaps else 0.0
         avg_overlap = sum(overlaps) / len(overlaps) if overlaps else 0.0
 
+        # ── P0: 方向一致性检查（区分漂移与演化）──
+        direction_consistency = self._calc_direction_consistency(anchor, new_content, category)
+
         # ── 2. 漂移检查（Drift Constraint）：新证据是否偏离锚点定义 ──
-        drift_score = 1.0 - _keyword_overlap(new_content, anchor.description or anchor.name)
+        # v2.2优化：方向一致的新内容，低重叠是演化不是漂移，漂移风险减半
+        if old_contents:
+            base_drift = 1.0 - avg_overlap
+            if direction_consistency > 0.5:
+                # 方向一致 → 演化，漂移风险减半
+                drift_score = base_drift * (1.0 - direction_consistency) * 0.5
+            else:
+                # 方向不一致 → 真正的漂移
+                drift_score = base_drift
+        else:
+            drift_score = 1.0 - _keyword_overlap(new_content, anchor.name or anchor.description or "")
 
         # ── 4. 重复检测：新证据与已有证据相似度 > 0.7 → 近似重复，建议合并 ──
         duplicate_of = None
@@ -53,6 +160,7 @@ class CPERegularizer:
                     "max_overlap": round(max_overlap, 3),
                     "avg_overlap": round(avg_overlap, 3),
                     "drift_score": round(drift_score, 3),
+                    "direction_consistency": round(direction_consistency, 3),
                     "existing_evidence_count": len(evs),
                     "duplicate_of": duplicate_of,
                 }
@@ -77,15 +185,43 @@ class CPERegularizer:
             risk_score += 0.1
             reasons.append(f"漂移风险: 轻微偏离{drift_score:.2f}")
 
-        # 证据量越多 → 保护应该越强（CPE的"旧能力权重递增"思想）
-        protection_weight = min(len(evs) / 10, 1.0)
-        risk_score = risk_score * (1.0 + protection_weight)  # 证据越多风险越敏感
+        # P0: 方向一致的新内容，标注为演化候选
+        if direction_consistency > 0.5 and max_overlap < 0.3:
+            reasons.append(f"演化候选: 方向一致性{direction_consistency:.2f}，低重叠为扩展非冲突")
+
+        # ── P2: 保护权重优化（成熟锚点也需要演化）──
+        # 原算法：protection_weight = min(len(evs)/10, 1.0)，上限1.0导致risk_score翻倍
+        # 优化后：上限降到0.5，方向一致的新内容保护权重再降70%
+        base_protection = min(len(evs) / 20, 0.5)
+        if direction_consistency > 0.5:
+            protection_weight = base_protection * 0.3  # 方向一致 → 保护权重降70%
+        else:
+            protection_weight = base_protection
+        risk_score = risk_score * (1.0 + protection_weight)
         risk_score = min(risk_score, 1.0)
 
-        # ── 判定 ──
-        if risk_score > 0.7:
-            action = "BLOCK"
-        elif risk_score > 0.4:
+        # ── 判定（P1: EVOLVE动作 + P3: 动态阈值 + P4: EVOLVE上限）──
+        thresholds = self._get_thresholds()
+        block_thresh = thresholds["block"]
+        evolve_thresh = thresholds["evolve"]
+        flag_thresh = thresholds["flag"]
+
+        if risk_score > block_thresh:
+            if direction_consistency > 0.5:
+                # P4: EVOLVE灰色空间并发上限检查——防膨胀
+                active_evolve = self._count_active_evolve()
+                if active_evolve >= self.evolve_max:
+                    # 灰色空间已满：降级为FLAG（标记但不进入观察期），不膨胀
+                    action = "FLAG"
+                    reasons.append(f"EVOLVE空间已满({active_evolve}/{self.evolve_max})，降级为FLAG防膨胀")
+                else:
+                    # 方向一致但风险高 → 演化通道：临时写入观察
+                    action = "EVOLVE"
+                    reasons.append(f"演化通道({self.mode}模式): 方向一致但风险高，进入观察期（灰色空间{active_evolve+1}/{self.evolve_max}）")
+            else:
+                # 方向不一致且风险高 → 真正的漂移，拦截
+                action = "BLOCK"
+        elif risk_score > flag_thresh:
             action = "FLAG"
         else:
             action = "PASS"
@@ -98,6 +234,7 @@ class CPERegularizer:
                 "max_overlap": round(max_overlap, 3),
                 "avg_overlap": round(avg_overlap, 3),
                 "drift_score": round(drift_score, 3),
+                "direction_consistency": round(direction_consistency, 3),
                 "protection_weight": round(protection_weight, 3),
                 "existing_evidence_count": len(evs),
             }

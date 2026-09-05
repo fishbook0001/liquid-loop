@@ -18,6 +18,7 @@ import uuid
 from pathlib import Path
 import hashlib
 import json
+import sys
 import os
 import re
 import logging
@@ -136,8 +137,8 @@ class Anchor:
                     self.liquidity = "cold"
                 else:
                     self.liquidity = "frozen"
-            except ValueError:
-                pass
+            except ValueError as _e:
+                sys.stderr.write(f"[workspace:warn] liquidity日期解析失败: {_e}\n")
         return {"value_density": self.value_density, "cognitive_stage": self.cognitive_stage, "liquidity": self.liquidity}
 
 
@@ -168,6 +169,13 @@ class Evidence:
     superseded_by: str = ""  # 本证据被哪条 winner 证据取代（空=未被取代）
     supersedes: list = field(default_factory=list)  # 本证据取代过的 loser 证据 id 列表（反向指针/血缘）
     superseded_at: str = ""  # 被取代/取代发生的时间戳（审计展示用）
+    # ── v2.1 多巴胺机制：正向增益(有用召回) + 负向衰减(无效召回) + 饱和曲线 ──
+    dopamine_hits: int = 0  # 正向多巴胺累计次数（有用召回/主动重放的增益计数）
+    miss_hits: int = 0  # 负向多巴胺累计次数（无效召回的衰减计数，连续无效=加速遗忘）
+    # ── v2.2 CPE演化通道：EVOLVE临时写入+观察期（区分漂移与演化）──
+    evolve_status: str = ""  # 空=正式证据 / "observing"=演化观察期中 / "graduated"=观察期通过转正 / "rejected"=观察期内被证明漂移已移除
+    evolve_observe_until: str = ""  # 观察期截止时间戳（ISO格式），空=无观察期
+    evolve_recall_hits: int = 0  # 观察期内被召回次数（≥3次且stability稳定→转正）
 
 
 @dataclass
@@ -273,8 +281,8 @@ class WorkspaceState:
                     if exp <= ref:
                         evicted += 1
                         continue
-                except ValueError:
-                    pass
+                except ValueError as _e:
+                    sys.stderr.write(f"[workspace:warn] temp记忆过期日期解析失败: {_e}\n")
             kept.append(m)
         self.memories = kept
         return evicted
@@ -707,10 +715,27 @@ class WorkspaceState:
         - 重算锚点稳定性与审计更新时间
         """
         prev_iter = self._iteration  # 上次 step 的迭代序号（τ 时间变量，非墙钟）
-        # 1. 证据权重时间衰减
+        # v2.1 抗衰预计算：被memory引用的证据ID集 + 锚点稳定性映射
+        referenced_ids = set()
+        for m in self.memories:
+            eids = getattr(m, 'evidence_ids', None)
+            if eids:
+                referenced_ids.update(eids)
+        anchor_stability = {a.id: getattr(a, 'stability', 0.5) for a in self.anchors}
+        # 1. 证据权重时间衰减（v2.1 差异化衰减率：抗衰机制）
         for e in self.evidences:
             if not e.archived:
-                e.weight = max(e.weight * ((1 - decay_rate) ** dt), 0.05)
+                anti_aging = 1.0
+                if getattr(e, 'recall_hits', 0) >= 2:
+                    anti_aging *= 0.4  # 被反复召回=抗衰
+                if e.id in referenced_ids:
+                    anti_aging *= 0.6  # 被memory引用=核心知识=抗衰
+                a_stab = anchor_stability.get(getattr(e, 'anchor_id', ''), 0.5)
+                if a_stab > 0.7:
+                    anti_aging *= 0.8  # 高稳定锚点=保护
+                effective_decay = min(decay_rate * anti_aging, 0.1)  # 上限防过度
+                floor = 0.1 if e.id in referenced_ids else 0.05  # 被引用证据下限更高
+                e.weight = max(e.weight * ((1 - effective_decay) ** dt), floor)
         # 预分桶（全量，O(E)）：供下方两方法复用，消除原实现各自对每个锚点全量扫描
         # evidences 的 O(A·E) 开销。_update_memory_stability 内部会过滤归档证据，
         # _recalc_anchor 保留全量（与原语义一致）。
@@ -738,24 +763,53 @@ class WorkspaceState:
         self.updated_at = now()
 
     # ── v1.5 注意力增益（#115 神经科学实证：多看几眼=价值升）──
-    def register_recall(self, evidence_ids):
-        """记录证据被召回命中 → 黏滞升稳（gaze 增益↔τ(x) 黏滞吸收）。
+    # ── v2.1 多巴胺机制：正向增益(有用召回) + 负向衰减(无效召回) + 新颖性奖励 + 饱和曲线 ──
+    def register_recall(self, evidence_ids, used: bool = True):
+        """记录证据被召回命中 → 多巴胺信号（正向增益/负向衰减）。
 
         #115 实证：人类面对多选项系统性低估中间项，但注意力（多看几眼）像增益旋钮
-        因果重塑主观价值（关键窗口在奖励揭晓前）。映射到液环：被反复召回的证据黏滞升稳，
-        对应三轨成核门槛≥2 + active recall 反复读取的离散版「升权」。
+        因果重塑主观价值（关键窗口在奖励揭晓前）。
+
+        v2.1 多巴胺机制：
+        - 正向多巴胺(used=True)：召回后被实际使用→黏滞升稳+stability增益
+        - 负向多巴胺(used=False)：召回后未被使用→轻微衰减+miss_hits累计
+        - 新颖性奖励：低权重证据被召回且使用→额外增益（预测误差，超出预期的有用）
+        - 饱和曲线：dopamine_hits越高，单次增益越小（避免单条证据垄断）
 
         守关键窗口（证据吸收须在 crystallization 前）：仅对未归档证据升权；
         已归档(archived)证据不升（零丢失，仅降权不增权）。
         """
         ATTENTION_GAIN_K = 0.15  # 黏滞系数：每次召回把 weight 向 1.0 渐进逼近
+        DOPAMINE_POSITIVE = 0.08  # 正向多巴胺基础增益
+        DOPAMINE_NEGATIVE = 0.95  # 负向多巴胺衰减系数
+        NOVELTY_BONUS = 1.5  # 低权重证据的新颖性奖励倍数
         ids = set(evidence_ids) if evidence_ids else set()
         for e in self.evidences:
             if e.id in ids and not e.archived and not e.superseded_by:
                 e.recall_hits += 1
                 e.last_recall_at = now()  # 记录召回时间，供 lifecycle 老化判据
-                # 黏滞增益：gaze 增益饱和曲线（多看一次不立即封顶，黏滞累积）
-                e.weight = min(1.0, e.weight + ATTENTION_GAIN_K * (1.0 - e.weight))
+                # P1: CPE演化通道——观察期内的证据召回计数，用于转正判定
+                if getattr(e, 'evolve_status', '') == "observing":
+                    if not hasattr(e, 'evolve_recall_hits'):
+                        e.evolve_recall_hits = 0
+                    e.evolve_recall_hits += 1
+                if used:
+                    # 正向多巴胺：黏滞升稳（gaze 增益饱和曲线）
+                    e.weight = min(1.0, e.weight + ATTENTION_GAIN_K * (1.0 - e.weight))
+                    # 多巴胺增益：低权重证据获得额外增益（新颖性奖励=预测误差）
+                    if not hasattr(e, 'dopamine_hits'):
+                        e.dopamine_hits = 0
+                    novelty = NOVELTY_BONUS if e.weight < 0.3 else 1.0
+                    saturation = max(0.3, 1.0 - e.dopamine_hits * 0.05)  # 饱和曲线
+                    gain = DOPAMINE_POSITIVE * novelty * saturation
+                    e.weight = min(1.0, e.weight + gain * (1.0 - e.weight))
+                    e.dopamine_hits += 1
+                else:
+                    # 负向多巴胺：轻微衰减+miss累计（连续无效=加速遗忘）
+                    if not hasattr(e, 'miss_hits'):
+                        e.miss_hits = 0
+                    e.weight = max(0.01, e.weight * DOPAMINE_NEGATIVE)
+                    e.miss_hits += 1
 
     # ── v1.8 软取代（supersede）原语：显式语义取代（区别于 lifecycle 自动老化归档）──
     def supersede_evidence(self, loser_id: str, winner_id: str) -> dict:
@@ -963,9 +1017,38 @@ class WorkspaceState:
         双判据理论基点（v1.7.1）：floor_weight=β(熵增成本权重)、ttl_eps=horizon(回忆效用半衰期)，
         来自增益自适应 efficient-coding objective（cost=α·准确性+β·熵增成本）的归一化推导，
         与"调权重>重写证据"同源——增益调节而非重连的生物实证支撑。
+
+        v2.2: CPE演化通道——观察期内的EVOLVE证据处理：
+        - 观察期内召回≥3次 → 转正(graduated)，weight恢复
+        - 观察期已过且召回<3次 → 拒绝(rejected)，冷归档
         """
-        protected = {eid for m in self.memories for eid in m.evidence_ids}
+        # ── P1: CPE演化通道观察期处理 ──
         now_ts = now()
+        evolved: list[str] = []
+        rejected: list[str] = []
+        for e in self.evidences:
+            if getattr(e, 'evolve_status', '') != "observing":
+                continue
+            observe_until = getattr(e, 'evolve_observe_until', '')
+            recall_hits = getattr(e, 'evolve_recall_hits', 0)
+            # 召回次数计入（register_recall时已bump，这里只做观察期判定）
+            try:
+                expired = observe_until and datetime.fromisoformat(observe_until) <= datetime.fromisoformat(now_ts)
+            except ValueError:
+                expired = False
+            if recall_hits >= 3:
+                # 观察期内被召回≥3次 → 转正
+                e.evolve_status = "graduated"
+                e.weight = min(1.0, e.weight + 0.2)  # 转正后weight恢复
+                evolved.append(e.id)
+            elif expired:
+                # 观察期已过且召回<3次 → 拒绝，冷归档
+                e.evolve_status = "rejected"
+                e.archived = True
+                e.archived_at = now_ts
+                rejected.append(e.id)
+        # ── 原有老化回收逻辑 ──
+        protected = {eid for m in self.memories for eid in m.evidence_ids}
         swept: list[str] = []
         for e in self.evidences:
             if e.archived:
@@ -974,6 +1057,8 @@ class WorkspaceState:
                 continue  # 结晶血缘保护：被任一 memory 引用的证据不归档
             if e.relation == "contradiction":
                 continue  # 冲突证据零丢失优先（守反证轨对抗群体幻觉）
+            if getattr(e, 'evolve_status', '') == "observing":
+                continue  # 观察期中的证据不参与老化回收
             # 年龄判据：优先用最后召回时间，否则用创建时间(timestamp)；二者皆空→保守不归档
             ref_ts = e.last_recall_at or e.timestamp
             if not ref_ts:
@@ -990,9 +1075,11 @@ class WorkspaceState:
             e.archived = True
             e.archived_at = now_ts
             swept.append(e.id)
-        if swept:
+        if swept or evolved or rejected:
             self.updated_at = now_ts
-        return {"swept": len(swept), "swept_ids": swept, "total": len(self.evidences)}
+        return {"swept": len(swept), "swept_ids": swept, "total": len(self.evidences),
+                "evolved": len(evolved), "evolved_ids": evolved,
+                "rejected": len(rejected), "rejected_ids": rejected}
 
     def lifecycle_sweep(self) -> dict:
         """公开老化回收入口（供 8790 手动/定时触发，或测试）。"""
@@ -1110,50 +1197,71 @@ class WorkspaceState:
         if not agent_id:
             return {"ok": False, "error": "forbidden: agent_id required to delete",
                     "memory_id": memory_id}
-        ev = next((e for e in self.evidences if e.id == memory_id), None)
-        if ev is not None:
-            if ev.agent_id != agent_id:
-                return {"ok": False, "error": "forbidden: not owner of evidence",
-                        "memory_id": memory_id}
-            for a in self.anchors:
-                if ev.anchor_id == a.id and memory_id in a.evidence_ids:
-                    a.evidence_ids.remove(memory_id)
-            self.evidences.remove(ev)
-            return {"ok": True, "deleted": "evidence", "memory_id": memory_id}
-        mem = next((m for m in self.memories if m.id == memory_id), None)
-        if mem is not None:
-            if mem.scope == "consensus":
-                return {"ok": False,
-                        "error": "forbidden: consensus memory requires unanimous contributor dissolution, not single-agent delete",
-                        "memory_id": memory_id}
-            if agent_id not in mem.contributors:
-                return {"ok": False, "error": "forbidden: not a contributor of this private memory",
-                        "memory_id": memory_id}
-            self.memories.remove(mem)
-            return {"ok": True, "deleted": "memory", "memory_id": memory_id}
-        mems = [m for m in self.memories if m.content == memory_id]
-        if mems:
-            if any(m.scope == "consensus" for m in mems):
-                return {"ok": False,
-                        "error": "forbidden: content matches consensus memory; use unanimous dissolution",
-                        "memory_id": memory_id}
-            owned = [m for m in mems if agent_id in m.contributors]
-            if not owned:
-                return {"ok": False, "error": "forbidden: no owned private memory matches content",
-                        "memory_id": memory_id}
-            ev_ids = {eid for m in owned for eid in m.evidence_ids}
-            ev_ids |= {e.id for e in self.evidences if e.content == memory_id and e.agent_id == agent_id}
-            for m in owned:
-                self.memories.remove(m)
-            to_del = [e for e in self.evidences if e.id in ev_ids]
-            for e in to_del:
-                for a in self.anchors:
-                    if e.id in a.evidence_ids:
-                        a.evidence_ids.remove(e.id)
-                self.evidences.remove(e)
-            return {"ok": True, "deleted": "memory+evidence(owned only)", "memory_id": memory_id,
-                    "memories": len(owned), "evidences": len(to_del)}
+        result = self._delete_evidence_by_id(agent_id, memory_id)
+        if result is not None:
+            return result
+        result = self._delete_memory_by_id(agent_id, memory_id)
+        if result is not None:
+            return result
+        result = self._delete_by_content(agent_id, memory_id)
+        if result is not None:
+            return result
         return {"ok": False, "error": "not_found", "memory_id": memory_id}
+
+    def _delete_evidence_by_id(self, agent_id: str, memory_id: str) -> Optional[dict]:
+        """按evidence id删除（仅所有者可删）。命中返回结果，未命中返回None。"""
+        ev = next((e for e in self.evidences if e.id == memory_id), None)
+        if ev is None:
+            return None
+        if ev.agent_id != agent_id:
+            return {"ok": False, "error": "forbidden: not owner of evidence",
+                    "memory_id": memory_id}
+        for a in self.anchors:
+            if ev.anchor_id == a.id and memory_id in a.evidence_ids:
+                a.evidence_ids.remove(memory_id)
+        self.evidences.remove(ev)
+        return {"ok": True, "deleted": "evidence", "memory_id": memory_id}
+
+    def _delete_memory_by_id(self, agent_id: str, memory_id: str) -> Optional[dict]:
+        """按memory id删除（private仅贡献者可删，consensus禁止单端删除）。"""
+        mem = next((m for m in self.memories if m.id == memory_id), None)
+        if mem is None:
+            return None
+        if mem.scope == "consensus":
+            return {"ok": False,
+                    "error": "forbidden: consensus memory requires unanimous contributor dissolution, not single-agent delete",
+                    "memory_id": memory_id}
+        if agent_id not in mem.contributors:
+            return {"ok": False, "error": "forbidden: not a contributor of this private memory",
+                    "memory_id": memory_id}
+        self.memories.remove(mem)
+        return {"ok": True, "deleted": "memory", "memory_id": memory_id}
+
+    def _delete_by_content(self, agent_id: str, memory_id: str) -> Optional[dict]:
+        """按content兜底删除（仅删调用者贡献的private+本人evidence，命中consensus整体拒绝）。"""
+        mems = [m for m in self.memories if m.content == memory_id]
+        if not mems:
+            return None
+        if any(m.scope == "consensus" for m in mems):
+            return {"ok": False,
+                    "error": "forbidden: content matches consensus memory; use unanimous dissolution",
+                    "memory_id": memory_id}
+        owned = [m for m in mems if agent_id in m.contributors]
+        if not owned:
+            return {"ok": False, "error": "forbidden: no owned private memory matches content",
+                    "memory_id": memory_id}
+        ev_ids = {eid for m in owned for eid in m.evidence_ids}
+        ev_ids |= {e.id for e in self.evidences if e.content == memory_id and e.agent_id == agent_id}
+        for m in owned:
+            self.memories.remove(m)
+        to_del = [e for e in self.evidences if e.id in ev_ids]
+        for e in to_del:
+            for a in self.anchors:
+                if e.id in a.evidence_ids:
+                    a.evidence_ids.remove(e.id)
+            self.evidences.remove(e)
+        return {"ok": True, "deleted": "memory+evidence(owned only)", "memory_id": memory_id,
+                "memories": len(owned), "evidences": len(to_del)}
 
     def dissolve_as(self, agent_id: str, memory_id: str, votes_root: Path) -> dict:
         """consensus 结晶的合法移除：全体贡献者各调用一次，集齐才真删。

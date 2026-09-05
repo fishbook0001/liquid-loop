@@ -1,6 +1,7 @@
 import json
 import os
 import shutil
+import sys
 import time
 from pathlib import Path
 from dataclasses import asdict
@@ -74,8 +75,8 @@ def _archive_id_set(workspace_root: Path) -> set:
                     if line:
                         try:
                             s.add(json.loads(line)["id"])
-                        except Exception:
-                            pass
+                        except Exception as _e:
+                            sys.stderr.write(f"[storage:warn] archive行解析失败，跳过: {_e}\n")
         _ARCHIVE_IDS = s
     return _ARCHIVE_IDS
 
@@ -96,7 +97,7 @@ def load(workspace_root: Path) -> WorkspaceState:
 # 若传入态相对磁盘全量灾难性缩水则拒绝落盘(保留磁盘 + CRITICAL 审计)，
 # 使"全量被部分态覆盖"成为不可能事件。必须在 evict_expired/归档压实 之前调用，
 # 使 archived 项仍计入传入态, 避免误拦合法归档。
-GUARD_MIN = 50        # 磁盘全量低于此值不拦(冷启动/小工作区)
+GUARD_MIN = 10        # 磁盘全量低于此值不拦(冷启动/小工作区) — 坑37修复：从50降到10，保护小工作区
 GUARD_RATIO = 0.1     # 传入态 < 磁盘*此比例 → 判定灾难性回退
 
 class StateRegressionGuardError(Exception):
@@ -123,8 +124,8 @@ def _guard_regression(state, workspace_root):
             get_audit_chain(workspace_root).append(
                 "state_save_guard_BLOCKED",
                 f"incoming={incoming_total}_disk={disk_total}_ratio={incoming_total/disk_total:.4f}")
-        except Exception:
-            pass
+        except Exception as _e:
+            sys.stderr.write(f"[storage:warn] 审计链写入失败(不阻断主错误): {_e}\n")
         raise StateRegressionGuardError(
             f"refuse catastrophic state regression: incoming={incoming_total} < "
             f"{GUARD_RATIO}*disk={disk_total} (disk preserved; see undo snapshot)")
@@ -164,8 +165,8 @@ def _snapshot_before_save(workspace_root: Path) -> str | None:
     for old in snaps[:-UNDO_KEEP]:
         try:
             old.unlink()
-        except OSError:
-            pass
+        except OSError as _e:
+            sys.stderr.write(f"[storage:warn] undo快照删除失败: {_e}\n")
     return ts
 
 
