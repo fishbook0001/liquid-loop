@@ -1,5 +1,20 @@
 # Changelog
 
+## v2.0.4 (2026-09-05) — 强代码化全盘审计+AP-007静默降级全量修复（2.0.3→2.0.4）
+
+- **强代码化全盘审计**：推版前对大脑（liquid_loop核心包）、心脏（8790服务ll_core.py）、编排层（liquid_orchestrator.py）执行全流程强代码化审计
+- **AP-007静默降级全量修复**：7处裸`except: pass`全部改为`sys.stderr.write`警告，保留fail-open语义但异常可追溯
+  - storage.py: 3处（archive行解析/审计链写入/undo快照删除）
+  - workspace.py: 2处（liquidity日期解析/temp记忆过期日期解析）
+  - cpe.py: 1处（evolve_observe_until日期解析）
+  - ll_core.py: 1处（审计链写入失败）
+- **delete_as函数拆分**：从57行拆分为4个方法（delete_as调度器+3个辅助方法），最大25行
+- **新模块入库**：generative_recall.py、hebbian_association.py、dual_engine_monitor.py、regeneration_metrics.py、liquid_loop_5insights_api.py（冒烟测试全部import通过）
+- **垃圾清理**：删除2个.bak备份文件和logs/目录
+- **技术字典v1.5**：新增坑38（AP-007静默降级全量修复），版本号头部/末尾不一致已修正
+- **审计结果**：storage.py/cpe.py/ll_core.py 0问题；workspace.py有条件通过（3个中优先级均为审计工具误报：注释比例实际23.2%非46.7%、YAGNI全是公共API、蒸馏双验证是通用建议非具体bug）
+- **版号统一**：README.md(2.0.1→2.0.4)、技术字典(2.0.3→2.0.4)、开发备忘录(2.0.3→2.0.4)、认知残差报告(2.0.3→2.0.4)
+
 ## v2.0.3 (2026-08-31) — 版本号统一+重复进程清理（2.0.2→2.0.3）
 
 - **版本号统一修复**：核心库（liquid-loop）与8790部署服务（marvis_memory）版本号对齐。此前8790服务因启动时缓存旧模块，/health返回2.0.1而核心库已升级到2.0.2，重启服务后统一为2.0.3。

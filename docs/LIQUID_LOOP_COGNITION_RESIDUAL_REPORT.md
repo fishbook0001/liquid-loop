@@ -250,7 +250,7 @@ anchor_id = explicit_id or sha1(name|description)[:12]
 
 - **硬件**：Apple M4 + 16GB RAM（推测，基于LNN硬件底座）
 - **Python**：3.14.5（/opt/homebrew/bin/python3）
-- **液环版本**：v2.0.3
+- **液环版本**：v2.0.4
 - **测试数据**：真实生产state（2.02MB，51 anchors，1397 evidences，314 memories）
 
 ### 4.2 测试结果
