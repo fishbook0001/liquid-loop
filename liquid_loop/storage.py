@@ -20,7 +20,15 @@ UNDO_KEEP = 10  # 写前快照轮转保留份数（state.json 1.7M×10 ≈ 17M�
 
 
 def _ensure_dir(workspace_root: Path) -> Path:
-    d = workspace_root / LIQUID_DIR
+    root = Path(workspace_root)
+    # 标本三根因修复（2026-09-06）：防 .liquid 套娃。
+    # cli.py 的 WORKSPACE = Path.cwd()，若在已存在的 .liquid 目录下跑 CLI，
+    # 会把 cwd 当 root 再拼一层 .liquid → 生 .liquid/.liquid 嵌套幽灵。
+    # 若 root 自身已命名为液环目录，则直接用 root 本身，不再二次拼接。
+    if root.name == LIQUID_DIR:
+        root.mkdir(exist_ok=True)
+        return root
+    d = root / LIQUID_DIR
     d.mkdir(exist_ok=True)
     return d
 
@@ -86,9 +94,29 @@ def load(workspace_root: Path) -> WorkspaceState:
     path = _ensure_dir(workspace_root) / STATE_FILE
     if not path.exists():
         return WorkspaceState()
-    with open(path, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    return _from_dict(data)
+    # 编码容错：state.json 可能因异常写入产生非 UTF-8 字节，
+    # 首次严格解码失败时退回 replace 模式并记录审计，避免整文件不可读。
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except UnicodeDecodeError:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            data = json.load(f)
+        try:
+            get_audit_chain(workspace_root).append(
+                "state_load_encoding_recovery",
+                f"unicode_decode_error_recovered_with_replace_at_{path}")
+        except Exception:
+            pass
+    state = _from_dict(data)
+    # 版本同步：state.json 可能因版本升级而滞后，加载时对齐当前代码版本
+    try:
+        from . import __version__ as _cur_ver
+        if getattr(state, 'version', None) != _cur_ver:
+            state.version = _cur_ver
+    except Exception:
+        pass  # 版本同步失败不阻断加载
+    return state
 
 
 # ── 灾难性回退护栏（2026-08-29 根治 · 飞哥"先治本"）────────
@@ -106,29 +134,60 @@ class StateRegressionGuardError(Exception):
 def _state_total(state) -> int:
     return len(state.anchors) + len(state.evidences) + len(state.memories)
 
-def _guard_regression(state, workspace_root):
-    """落盘前置护栏: 拒绝把全量磁盘态覆盖成近似空态。返回 None=通过。
 
-    触发时: 写 CRITICAL 审计 + 抛 StateRegressionGuardError(磁盘不变)。
-    仅在磁盘全量 >= GUARD_MIN 时启用, 小工作区/冷启动放行。"""
+def _critical_anchor_ids(state) -> set:
+    """提取关键锚点ID：stability >= 0.5 的高稳定性锚点（第二判据用）。"""
+    return {a.id for a in getattr(state, 'anchors', [])
+            if getattr(a, 'stability', 0) >= 0.5}
+
+
+def _guard_regression(state, workspace_root):
+    """落盘前置护栏: 拒绝把全量磁盘态覆盖成近似空态或丢失关键锚点。返回 None=通过。
+
+    双判据：
+    1. 总量判据：传入态 < 磁盘*GUARD_RATIO → 灾难性回退
+    2. 关键锚点判据：磁盘中高stability(>=0.5)锚点在传入态中丢失 → 灾难性回退
+    任一判据触发即拦截。仅在磁盘全量 >= GUARD_MIN 时启用。"""
     try:
         disk = load(workspace_root)
     except Exception:
         return  # 读不到磁盘(如首次写) → 不拦
     disk_total = _state_total(disk)
+    if disk_total == 0:
+        # 全新空工作区（首次写/冷启动）：无可覆盖全量，放行但留痕，
+        # 使"在何处新建了库"可观测（标本三原先的无痕落盘通道 → 有审计痕迹）。
+        try:
+            get_audit_chain(workspace_root).append(
+                "state_save_fresh_workspace",
+                f"disk_total=0 first_write at {workspace_root}")
+        except Exception:
+            pass
+        return
     if disk_total < GUARD_MIN:
-        return  # 小工作区/冷启动 → 不拦
+        return  # 小工作区(<GUARD_MIN) → 不拦，保护小库误拦
     incoming_total = _state_total(state)
-    if incoming_total < disk_total * GUARD_RATIO:
+    # 判据1：总量灾难性缩水
+    ratio_triggered = incoming_total < disk_total * GUARD_RATIO
+    # 判据2：关键高stability锚点丢失
+    disk_critical = _critical_anchor_ids(disk)
+    incoming_ids = {a.id for a in getattr(state, 'anchors', [])}
+    lost_critical = disk_critical - incoming_ids
+    anchor_triggered = len(disk_critical) >= 3 and len(lost_critical) >= len(disk_critical) * 0.5
+    if ratio_triggered or anchor_triggered:
+        reason_parts = []
+        if ratio_triggered:
+            reason_parts.append(f"ratio incoming={incoming_total} < {GUARD_RATIO}*disk={disk_total}")
+        if anchor_triggered:
+            reason_parts.append(f"lost {len(lost_critical)}/{len(disk_critical)} critical anchors")
+        reason = "; ".join(reason_parts)
         try:
             get_audit_chain(workspace_root).append(
                 "state_save_guard_BLOCKED",
-                f"incoming={incoming_total}_disk={disk_total}_ratio={incoming_total/disk_total:.4f}")
+                f"{reason}")
         except Exception as _e:
             sys.stderr.write(f"[storage:warn] 审计链写入失败(不阻断主错误): {_e}\n")
         raise StateRegressionGuardError(
-            f"refuse catastrophic state regression: incoming={incoming_total} < "
-            f"{GUARD_RATIO}*disk={disk_total} (disk preserved; see undo snapshot)")
+            f"refuse catastrophic state regression: {reason} (disk preserved; see undo snapshot)")
 
 
 # ── undo checkpoint（m60 建议3 落地 · 2026-08-29）──
@@ -255,14 +314,25 @@ def locked_state(workspace_root: Path):
         lk.close()
 
 
+def _safe_kwargs(cls, data: dict) -> dict:
+    """过滤掉 dataclass 不接受的字段，防止版本升级时字段不兼容导致加载失败。"""
+    import inspect
+    try:
+        sig = inspect.signature(cls.__init__)
+        accepted = set(sig.parameters.keys())
+        return {k: v for k, v in data.items() if k in accepted}
+    except Exception:
+        return data
+
+
 def _from_dict(data: dict) -> WorkspaceState:
     return WorkspaceState(
-        anchors=[Anchor(**a) for a in data.get("anchors", [])],
-        evidences=[Evidence(**e) for e in data.get("evidences", [])],
-        memories=[Memory(**m) for m in data.get("memories", [])],
-        conflicts=[Conflict(**c) for c in data.get("conflicts", [])],
-        relations=[AnchorRelation(**r) for r in data.get("relations", [])],
-        snapshots=[StateSnapshot(**s) for s in data.get("snapshots", [])],
+        anchors=[Anchor(**_safe_kwargs(Anchor, a)) for a in data.get("anchors", [])],
+        evidences=[Evidence(**_safe_kwargs(Evidence, e)) for e in data.get("evidences", [])],
+        memories=[Memory(**_safe_kwargs(Memory, m)) for m in data.get("memories", [])],
+        conflicts=[Conflict(**_safe_kwargs(Conflict, c)) for c in data.get("conflicts", [])],
+        relations=[AnchorRelation(**_safe_kwargs(AnchorRelation, r)) for r in data.get("relations", [])],
+        snapshots=[StateSnapshot(**_safe_kwargs(StateSnapshot, s)) for s in data.get("snapshots", [])],
         version=data.get("version", "0.4.0"),
         updated_at=data.get("updated_at", ""),
         audit_chain_hash=data.get("audit_chain_hash", "genesis"),
@@ -271,4 +341,13 @@ def _from_dict(data: dict) -> WorkspaceState:
         self_refine_results=data.get("self_refine_results", []),
         self_refine_repair_count=data.get("self_refine_repair_count", 0),
         _iteration=data.get("_iteration", 0),  # Layer-1 修复：τ=有效迭代计数必须持久化，否则重启后归零→强化门控恒真→时间衰减失效
+        # 【v0.5.0】CPE 正则化状态
+        regularized_evidences=data.get("regularized_evidences", []),
+        blocked_evidences=data.get("blocked_evidences", []),
+        cpe_erosion_warnings=data.get("cpe_erosion_warnings", []),
+        cpe_regularization_count=data.get("cpe_regularization_count", 0),
+        # 【v2.0.5】即时觉醒模块
+        instant_events=data.get("instant_events", []),
+        instant_awareness_stats=data.get("instant_awareness_stats", {"total_events": 0, "detected": 0, "awareness_rate": 0.0}),
+        instant_recent_ops=data.get("instant_recent_ops", []),
     )
