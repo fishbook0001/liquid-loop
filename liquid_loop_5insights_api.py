@@ -180,8 +180,15 @@ class InsightsAPIHandler(BaseHTTPRequestHandler):
             self._send_json({"error": "not_found", "path": self.path}, status=404)
     
     def log_message(self, format, *args):
-        """简化日志"""
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] {args[0]}")
+        """简化日志（含来源标识）
+
+        2026-09-21 增强：原实现仅记录请求行，无法回溯发起来源
+        （见《液环8791进程调查报告_2026-09-21》§五 建议1）。现追加
+        User-Agent / Referer，用于锁定 marvis 时代旧路径 404 探针的归属。
+        """
+        ua = self.headers.get("User-Agent", "-")
+        ref = self.headers.get("Referer", "-")
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] {args[0]} ua={ua!r} ref={ref!r}")
 
 
 def main():
