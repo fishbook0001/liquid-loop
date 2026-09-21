@@ -322,3 +322,139 @@ def eval_patience_check(
         "recency_ratio": ratio,
         "trend": trend,
     }
+
+
+# ── v3.2 环境锚时效门：实现体（2026-09-13 缺口① 补齐）─────────────────────────
+# 背景：PerceptionGate 早已留有 env_anchor_probe 参数插槽与 decide() 中最高优先
+#       拦截分支，但本包内无实现体、调用方亦未注入 → 机制长期停留在「纸面」。
+#       本段补齐实现体，保持零依赖（仅标准库）：真实锚记录与实时探针由调用方注入。
+#
+# 判定两类「真实漂移」（不构造假设值，全部来自真实锚记录 + 实时探测）：
+#   1) 时效漂移：锚 last_verified(observed_at) 距今 > ttl_days → stale
+#   2) 值漂移  ：live_probe(key) 实测 ≠ 锚记录值 → stale
+# 无环境断言的动作 → 返回 None（零影响，不改变既有门行为）。
+ENV_ANCHOR_TTL_DAYS_DEFAULT = 7.0
+
+
+def _env_assertions(action):
+    """从候选动作抽取环境断言 → {key: {"value": str, "observed_at": str|None}}。
+
+    支持三种形态（均不新增依赖）：
+      1) {"env_assert": {"ip": "192.168.1.93", ...}}
+      2) {"env_assert": [{"key": k, "value": v, "observed_at": ts}, ...]}
+      3) {"env_anchor": {"facts": {...}, "observed_at": ts}}
+    非 dict / 无断言 → None。
+    """
+    if not isinstance(action, dict):
+        return None
+    raw = action.get("env_assert")
+    default_ts = None
+    if raw is None:
+        blk = action.get("env_anchor")
+        if isinstance(blk, dict):
+            raw = blk.get("facts")
+            default_ts = blk.get("observed_at")
+    if isinstance(raw, dict):
+        out = {}
+        for k, v in raw.items():
+            if isinstance(v, dict) and "value" in v:  # 形态 1b：值为记录 {value, observed_at}
+                out[str(k)] = {"value": str(v.get("value", "")),
+                               "observed_at": v.get("observed_at") or default_ts}
+            else:
+                out[str(k)] = {"value": str(v), "observed_at": default_ts}
+        return out
+    if isinstance(raw, list):
+        out = {}
+        for it in raw:
+            if isinstance(it, dict) and it.get("key") is not None:
+                out[str(it["key"])] = {"value": str(it.get("value", "")),
+                                       "observed_at": it.get("observed_at") or default_ts}
+        return out or None
+    return None
+
+
+def evaluate_env_anchor(action, anchor_lookup=None, live_probe=None,
+                        ttl_days=None, now=None):
+    """环境锚时效门判定核（真实漂移驱动，纯函数、零依赖）。
+
+    参数：
+      action       : 候选动作（形态见 _env_assertions）
+      anchor_lookup: callable(key) -> {"value": str, "observed_at": iso} | None
+                     真实锚记录来源（如液环 env_anchor 证据）；None=只用 action 内断言
+      live_probe   : callable(key) -> str | None   实时探测（ipconfig/ps/lsof/curl 等）
+      ttl_days     : 时效阈值；None → env LIQUID_ENV_ANCHOR_TTL_DAYS 或 7.0
+      now          : 注入当前时间（测试用），None=time.time()
+
+    返回：None（不涉环境断言，零影响）
+          {"stale": bool, "detail": str, "reasons": [...], "checked": {...}, "ttl_days": float}
+    """
+    import os as _os
+    import time as _time
+    from datetime import datetime as _dt
+
+    asserts = _env_assertions(action)
+    if not asserts:
+        return None
+    if ttl_days is None:
+        try:
+            ttl_days = float(_os.environ.get("LIQUID_ENV_ANCHOR_TTL_DAYS", "")
+                             or ENV_ANCHOR_TTL_DAYS_DEFAULT)
+        except (TypeError, ValueError):
+            ttl_days = ENV_ANCHOR_TTL_DAYS_DEFAULT
+    _now = float(now if now is not None else _time.time())
+
+    reasons, checked = [], {}
+    for key, claim in asserts.items():
+        ref = claim
+        if anchor_lookup is not None:
+            try:
+                got = anchor_lookup(key)
+            except Exception:
+                got = None
+            if isinstance(got, dict):
+                ref = {"value": str(got.get("value", claim.get("value", ""))),
+                       "observed_at": got.get("observed_at") or claim.get("observed_at")}
+        item = {"claim": claim.get("value", ""), "observed_at": ref.get("observed_at"),
+                "age_days": None, "ttl_ok": None, "live": None, "value_match": None}
+        # 1) 时效漂移
+        ts_raw = ref.get("observed_at")
+        if ts_raw:
+            try:
+                _t = _dt.fromisoformat(str(ts_raw))
+                _age_days = (_now - _t.timestamp()) / 86400.0
+                item["age_days"] = round(_age_days, 3)
+                item["ttl_ok"] = _age_days <= ttl_days
+                if _age_days > ttl_days:
+                    reasons.append(f"时效漂移: {key} last_verified {_age_days:.1f} 天 > "
+                                   f"TTL {ttl_days:.0f} 天")
+            except (TypeError, ValueError):
+                item["ttl_ok"] = None
+        # 2) 值漂移
+        if live_probe is not None:
+            try:
+                live = live_probe(key)
+            except Exception:
+                live = None
+            if live is not None:
+                item["live"] = str(live)
+                item["value_match"] = str(live).strip() == str(ref.get("value", "")).strip()
+                if not item["value_match"]:
+                    reasons.append(f"值漂移: {key} 锚记录={ref.get('value')!r} "
+                                   f"实测={live!r}")
+        checked[key] = item
+    return {"stale": bool(reasons), "detail": "; ".join(reasons)[:300],
+            "reasons": reasons, "checked": checked, "ttl_days": ttl_days}
+
+
+def make_env_anchor_probe(anchor_lookup=None, live_probe=None, ttl_days=None):
+    """构造 PerceptionGate(env_anchor_probe=...) 可注入的探针（缺口① 实现体入口）。
+
+    返回 callable(action) -> None | {"stale": bool, ...}：语义与 PerceptionGate.decide
+    第 170-181 行分支一致 —— stale 即 block（须重取证），None 即不涉环境断言（零影响）。
+    """
+    def _probe(action):
+        return evaluate_env_anchor(action, anchor_lookup=anchor_lookup,
+                                   live_probe=live_probe, ttl_days=ttl_days)
+
+    _probe.__name__ = "env_anchor_probe"
+    return _probe

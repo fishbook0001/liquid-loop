@@ -6,7 +6,7 @@ from .textutil import (
     _dissolve_votes_path, _load_dissolve_votes, _save_dissolve_votes,
 )
 from .audit import AuditChain
-from .cpe import CPERegularizer
+from .cpe import AGGREGATE_ANCHOR_NAMES, CPERegularizer
 from .self_refine import SelfRefineEngine, meta_thinker_evaluate, meta_thinker_advice
 from .guard import validate_content
 
@@ -179,6 +179,38 @@ class Evidence:
 
 
 @dataclass
+class WorkingMemoryItem:
+    """L1工作记忆：短期任务上下文缓冲，有TTL和容量上限，可提升为长期记忆。
+
+    与evidences的区别：evidences是L2情景记忆（持久化、参与成核），working_memory是
+    L1工作记忆（短期、当前任务上下文、自动过期、不参与成核）。
+    """
+    id: str = field(default_factory=uid)
+    content: str = ""
+    agent_id: str = ""
+    created_at: str = field(default_factory=now)
+    expires_at: str = ""  # ISO时间戳，空=永不过期（不推荐）
+    priority: int = 0  # 0=普通，1=重要，2=关键（高优先级在容量满时保留更久）
+    source: str = ""  # 来源：task_context/user_input/tool_result/intermediate
+    promoted_to: str = ""  # 提升为evidence/memory后的ID，空=未提升
+    recall_hits: int = 0  # 被召回次数（用于判断是否值得提升）
+    last_recall_at: str = ""
+
+    def is_expired(self, ref_dt=None) -> bool:
+        if not self.expires_at:
+            return False
+        try:
+            from datetime import datetime, timezone
+            exp = datetime.fromisoformat(self.expires_at)
+            if exp.tzinfo is None:
+                exp = exp.replace(tzinfo=timezone.utc)
+            ref = ref_dt or datetime.now(timezone.utc)
+            return exp <= ref
+        except ValueError:
+            return False
+
+
+@dataclass
 class Memory:
     id: str = field(default_factory=uid)
     content: str = ""
@@ -203,6 +235,12 @@ class Memory:
     # ── 蒸馏 #202 记忆外置·分级存储 + 生命周期(TTL) ──
     tier: str = "fact"  # 记忆分级: fact(事实)/preference(偏好)/temp(临时)。temp 可被 TTL 回收
     expires_at: str = ""  # ISO 时间戳；非空且已过期 → evict_expired 回收（仅 temp）。空=永不过期
+    # ── v2.1 真独立观测验证（解决字符串判重缺口）──
+    observation_hashes: dict = field(default_factory=dict)  # {agent_id: sha256(观测内容)[:16]}，证明各contributor真有独立观测
+    observation_timestamps: dict = field(default_factory=dict)  # {agent_id: iso_timestamp}，观测时间分离度可查
+    # ── v2.1 权威直注核（authority_direct，规则类单源合法）──
+    authority_source: str = ""  # 权威来源标识（如 marvis_rule_v1, liquid_loop_spec）
+    authorization_record: str = ""  # 授权记录（如 user_authorized@2026-08-20, scope=R17-R27）
 
 
 @dataclass
@@ -250,6 +288,10 @@ class WorkspaceState:
     self_refine_probes: list[dict] = field(default_factory=list)
     self_refine_results: list[dict] = field(default_factory=list)
     self_refine_repair_count: int = 0
+    # 【v2.0.5】即时觉醒模块：越界事件实时检测与日志
+    instant_events: list[dict] = field(default_factory=list)  # 即时越界事件日志（最近100条）
+    instant_awareness_stats: dict = field(default_factory=lambda: {"total_events": 0, "detected": 0, "awareness_rate": 0.0})
+    instant_recent_ops: list[dict] = field(default_factory=list)  # 短期操作记忆（用于重复事件检测，最近50条）
     # 【v0.5.0】CPE 正则化状态（借鉴 UIUC CPE 论文 arXiv:2605.09315）
     regularized_evidences: list[str] = field(default_factory=list)  # 已通过正则化检查的证据ID
     blocked_evidences: list[str] = field(default_factory=list)      # 被正则化拦截的证据ID
@@ -258,6 +300,10 @@ class WorkspaceState:
     overlap_cache: dict = field(default_factory=dict)  # 缓存关键词重叠度
     _iteration: int = 0  # 有效状态更新次数（τ = Effective Iteration）；时间动力学以之为时间变量而非墙钟
     canon_fn: object = None  # 可替换 Projection Layer（Layer-1 修复）：注入后冲突检测复用此投影，None=旧关键词重叠回退
+    # 【v2.1.0】L1工作记忆层：短期任务上下文缓冲，TTL+容量上限，可提升为长期记忆
+    working_memory: list[WorkingMemoryItem] = field(default_factory=list)
+    working_memory_capacity: int = 50  # L1工作记忆容量上限
+    working_memory_default_ttl_hours: int = 24  # 默认TTL（小时）
 
     # ── 蒸馏 #202 记忆外置·生命周期(TTL) 回收 ──
     def evict_expired(self, ref_dt=None) -> int:
@@ -286,6 +332,90 @@ class WorkspaceState:
             kept.append(m)
         self.memories = kept
         return evicted
+
+    # ── L1工作记忆层方法（v2.1.0）──
+
+    def add_working_memory(self, content: str, agent_id: str = "",
+                           ttl_hours: int = None, priority: int = 0,
+                           source: str = "") -> WorkingMemoryItem:
+        """添加一条L1工作记忆。自动过期回收+容量上限。"""
+        from datetime import datetime, timezone, timedelta
+        ttl = ttl_hours if ttl_hours is not None else self.working_memory_default_ttl_hours
+        expires = (datetime.now(timezone.utc) + timedelta(hours=ttl)).isoformat()
+        item = WorkingMemoryItem(
+            content=content, agent_id=agent_id,
+            expires_at=expires, priority=priority, source=source,
+        )
+        self.working_memory.append(item)
+        self._enforce_working_memory_capacity()
+        self.updated_at = now()
+        return item
+
+    def get_working_memory(self, agent_id: str = "", limit: int = 20) -> list[WorkingMemoryItem]:
+        """获取未过期的工作记忆，按优先级+创建时间排序。"""
+        self.evict_expired_working_memory()
+        items = [w for w in self.working_memory if not w.is_expired()]
+        if agent_id:
+            items = [w for w in items if w.agent_id == agent_id or not w.agent_id]
+        items.sort(key=lambda w: (-w.priority, w.created_at), reverse=False)
+        return items[:limit]
+
+    def recall_working_memory(self, item_id: str) -> Optional[WorkingMemoryItem]:
+        """召回一条工作记忆（记录召回次数，用于提升判断）。"""
+        for w in self.working_memory:
+            if w.id == item_id:
+                w.recall_hits += 1
+                w.last_recall_at = now()
+                return w
+        return None
+
+    def promote_working_memory(self, item_id: str, anchor_name: str = "working_memory_promoted",
+                               principle: str = "") -> Optional[Evidence]:
+        """将工作记忆提升为L2证据（长期记忆）。提升后工作记忆标记promoted_to。"""
+        item = next((w for w in self.working_memory if w.id == item_id), None)
+        if not item:
+            return None
+        anchor = next((a for a in self.anchors if a.name == anchor_name), None)
+        if not anchor:
+            anchor = self.add_anchor(anchor_name, description="L1工作记忆提升的证据")
+        evidence = self.add_evidence(
+            anchor, item.content, agent_id=item.agent_id,
+            principle=principle or item.source,
+        )
+        if evidence:
+            item.promoted_to = evidence.id
+        return evidence
+
+    def evict_expired_working_memory(self, ref_dt=None) -> int:
+        """回收过期的工作记忆。返回回收条数。"""
+        if not self.working_memory:
+            return 0
+        kept, evicted = [], 0
+        for w in self.working_memory:
+            if w.is_expired(ref_dt) and not w.promoted_to:
+                evicted += 1
+                continue
+            kept.append(w)
+        self.working_memory = kept
+        return evicted
+
+    def _enforce_working_memory_capacity(self):
+        """强制工作记忆容量上限：超量时按优先级+召回次数淘汰最低的。"""
+        if len(self.working_memory) <= self.working_memory_capacity:
+            return
+        # 排序：先保留未过期的，再按优先级+召回次数，淘汰最低的
+        self.working_memory.sort(
+            key=lambda w: (w.is_expired(), -w.priority, -w.recall_hits, w.created_at)
+        )
+        # 未提升的先淘汰
+        unpromoted = [w for w in self.working_memory if not w.promoted_to]
+        promoted = [w for w in self.working_memory if w.promoted_to]
+        overflow = len(self.working_memory) - self.working_memory_capacity
+        if overflow > 0 and unpromoted:
+            # 淘汰最旧的未提升的
+            unpromoted.sort(key=lambda w: (w.priority, w.recall_hits, w.created_at))
+            self.working_memory = promoted + unpromoted[overflow:]
+        self.updated_at = now()
 
     # ── API 层：add_anchor / add_evidence（让 README 示例能跑通）──
 
@@ -423,13 +553,18 @@ class WorkspaceState:
             if len(owners) < 2:
                 continue
             # 已存在的共识结晶：把新一致方并入 contributors（动态扩展，支撑三方+ CCI 计量）
-            existing = next((m for m in self.memories if m.scope == "consensus" and m.content == content), None)
+            existing = next((m for m in self.memories if m.scope in ("consensus", "authority_direct") and m.content == content), None)
             if existing is not None:
                 merged = set(existing.contributors) | owners
                 if merged != set(existing.contributors):
                     existing.contributors = sorted(merged)
+                    # v2.1 新owner加入时补观测验证
+                    for e in group:
+                        if e.content == content and e.agent_id in owners and e.agent_id not in existing.observation_hashes:
+                            existing.observation_hashes[e.agent_id] = hashlib.sha256(f'{e.id}:{e.agent_id}:{e.content}'.encode()).hexdigest()[:16]
+                            existing.observation_timestamps[e.agent_id] = e.created_at if hasattr(e, 'created_at') and e.created_at else now()
                 continue
-            if (content, "consensus") not in crystallized_keys:
+            if (content, "consensus") not in crystallized_keys and (content, "authority_direct") not in crystallized_keys:
                 evidence_ids = [e.id for e in group if e.content == content and e.agent_id in owners]
                 confidence = min(len(owners) / 2.0, 1.0)
                 # v1.3 因果演化循环成核：血缘注册（caused_by=成核证据链；contradicts=反证指向）
@@ -438,14 +573,43 @@ class WorkspaceState:
                           and e.relation == "contradiction" and e.target_memory_id]
                 if contra:
                     causal["contradicts"] = contra
-                self.memories.append(Memory(
-                    content=content,
-                    evidence_ids=evidence_ids,
-                    confidence=confidence,
-                    scope="consensus",
-                    contributors=sorted(owners),
-                    causal=causal,
-                ))
+                # v2.1 真独立观测验证：成核时自动记录各contributor的观测哈希+时间戳
+                obs_hashes = {}
+                obs_timestamps = {}
+                for e in group:
+                    if e.content == content and e.agent_id in owners:
+                        obs_hashes[e.agent_id] = hashlib.sha256(f'{e.id}:{e.agent_id}:{e.content}'.encode()).hexdigest()[:16]
+                        obs_timestamps[e.agent_id] = e.created_at if hasattr(e, 'created_at') and e.created_at else now()
+                # v2.1 权威直注自动判定：证据带authority/rule标签或来自权威注入源 → authority_direct核
+                auth_evidences = [e for e in group if e.content == content and e.agent_id in owners
+                                  and (hasattr(e, 'tags') and e.tags and any(t in ('authority', 'rule', 'spec') for t in e.tags))]
+                if auth_evidences and len(owners) == 1:
+                    # 单源权威注入 → authority_direct
+                    auth_source = auth_evidences[0].agent_id
+                    self.memories.append(Memory(
+                        content=content,
+                        evidence_ids=evidence_ids,
+                        confidence=1.0,
+                        scope="authority_direct",
+                        contributors=sorted(owners),
+                        causal=causal,
+                        observation_hashes=obs_hashes,
+                        observation_timestamps=obs_timestamps,
+                        authority_source=auth_source,
+                        authorization_record=f"auto_inferred@{now()},source={auth_source}",
+                    ))
+                else:
+                    # 多源观测一致 → consensus
+                    self.memories.append(Memory(
+                        content=content,
+                        evidence_ids=evidence_ids,
+                        confidence=confidence,
+                        scope="consensus",
+                        contributors=sorted(owners),
+                        causal=causal,
+                        observation_hashes=obs_hashes,
+                        observation_timestamps=obs_timestamps,
+                    ))
         # ── v1.4 原理优先成核（MSM 反哺：先教 why 再教 how）──
         # 共享 principle 的证据（即便 surface content 不同）结晶为「原理记忆」：
         # 原理成为首类结晶核心，表层事实经 causal.caused_by 挂到原理之下。
@@ -527,10 +691,9 @@ class WorkspaceState:
         # distill/research_asset/principle 等锚点设计上聚合多主题资产，
         # keyword-overlap 平均一致度天然偏低，会系统性误报冲突/漂移。
         _agg_anchor = next((a for a in self.anchors if a.id == anchor_id), None)
-        if _agg_anchor and _agg_anchor.name in {
-            "distill", "research_asset", "tool_ref", "principle",
-            "harness-factor", "pattern", "metacontrol_flag", "pending_action",
-        }:
+        # P3c（2026-09-12）：豁免名单收敛为单一口径源（liquid_loop.cpe.AGGREGATE_ANCHOR_NAMES），
+        # 消除此前的双份字面量（CPE 扫描与冲突检测曾各自维护，存在漂移风险）。
+        if _agg_anchor and _agg_anchor.name in AGGREGATE_ANCHOR_NAMES:
             self.conflicts = [c for c in self.conflicts if c.anchor_a != anchor_id]
             return
         distinct: list = []
@@ -704,8 +867,8 @@ class WorkspaceState:
                 m.last_reinforced = max(e.timestamp for e in supports)
                 m.last_reinforced_iter = max(e.added_iter for e in supports)
 
-    def step(self, dt: int = 1, decay_rate: float = 0.05):
-        """显式时间动力学步（v0.8 液态循环核心）：
+    def step(self, dt: int = 1, decay_rate: float = 0.05) -> None:
+        """显式时间动力学步（v0.8 液态循环核心，v2.1加错误快照保护）：
 
             M(t+1) = M(t) + reinforcement − decay − contradiction_penalty
 
@@ -713,7 +876,21 @@ class WorkspaceState:
         - 每个 memory 按 support/contradiction 计数重算固有稳定性（矛盾惩罚持续作用）；
           若本轮有 support 证据 → 稳定性恢复到固有值（强化）；否则按时间衰减（无强化流失）
         - 重算锚点稳定性与审计更新时间
+        - v2.1: try/except快照保护，异常记录到self._step_errors不静默崩溃
         """
+        if not hasattr(self, '_step_errors'):
+            self._step_errors = []
+        try:
+            self._step_impl(dt, decay_rate)
+        except Exception as e:
+            import traceback
+            err = f"step()异常 dt={dt} decay={decay_rate}: {e}\n{traceback.format_exc()[-500:]}"
+            self._step_errors.append(err)
+            print(f"⚠️  [step] {err.splitlines()[0]}", file=sys.stderr)
+            # 异常后不re-raise，防止训练循环中断；错误已记录可追溯
+
+    def _step_impl(self, dt: int = 1, decay_rate: float = 0.05) -> None:
+        """step()核心逻辑（被try/except包裹）"""
         prev_iter = self._iteration  # 上次 step 的迭代序号（τ 时间变量，非墙钟）
         # v2.1 抗衰预计算：被memory引用的证据ID集 + 锚点稳定性映射
         referenced_ids = set()

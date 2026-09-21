@@ -32,5 +32,9 @@ upload_pypi.py
 *.tar.gz
 *.zip
 
+# Runtime logs
+logs/
+*.out.log
+
 # Benchmark datasets (download from upstream, not committed)
 benchmarks/data/

@@ -46,8 +46,8 @@ def _get_version() -> str:
     pyproject = Path(__file__).parent.parent / "pyproject.toml"
     if pyproject.exists():
         data = tomllib.loads(pyproject.read_text())
-        return data.get("project", {}).get("version", "2.0.0")
-    return "1.8.4"
+        return data.get("project", {}).get("version", "2.2.0")
+    return "2.2.0"
 
 def _tokenize(text: str) -> List[str]:
     """关键词分词（零依赖替代 sentence-transformers）
@@ -98,20 +98,23 @@ def _keyword_overlap(a: str, b: str, cache: dict | None = None) -> float:
         cache[key] = result
     return result
 
-def _judge_answer(gold: str, answer: str) -> bool:
-    """简单判定答案是否正确（关键词命中）"""
+def _judge_answer(gold: str, answer: str) -> tuple:
+    """判定答案是否正确，返回 (passed: bool, confidence: float)。
+
+    双判据：passed=布尔判定，confidence=关键词命中率(0.0-1.0)。
+    调用方应同时检查 passed 和 confidence，避免单判据误判。"""
     if not gold or not answer:
-        return False
+        return (False, 0.0)
     gold_lower = gold.lower()
     answer_lower = answer.lower()
     if gold_lower in answer_lower or answer_lower in gold_lower:
-        return True
+        return (True, 1.0)
     gold_kw = set(_tokenize(gold))
     answer_kw = set(_tokenize(answer))
     if not gold_kw:
-        return False
+        return (False, 0.0)
     hit = len(gold_kw & answer_kw) / len(gold_kw)
-    return hit >= 0.3
+    return (hit >= 0.3, round(hit, 3))
 
 def _dissolve_votes_path(root: Path) -> Path:
     return Path(root) / ".dissolve_votes.json"

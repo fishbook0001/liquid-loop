@@ -16,7 +16,8 @@ STATE_FILE = "state.json"
 AUDIT_FILE = "audit.log"
 ARCHIVE_FILE = "archive.jsonl"
 UNDO_DIR = "undo"
-UNDO_KEEP = 10  # 写前快照轮转保留份数（state.json 1.7M×10 ≈ 17M，可接受）
+UNDO_KEEP = 5  # 写前快照轮转保留份数（state.json 2.5M×5 ≈ 12.5M）
+UNDO_MIN_INTERVAL = 60  # 最小快照间隔(秒)：60秒内多次save只生成1次快照，减少写入风暴
 
 
 def _ensure_dir(workspace_root: Path) -> Path:
@@ -206,21 +207,31 @@ def _undo_dir(workspace_root: Path) -> Path:
 def _snapshot_before_save(workspace_root: Path) -> str | None:
     """写前快照：把当前 state.json 复制为 undo-<ts>.json，轮转清理旧份。
 
+    v2.0.6修复：加最小时间间隔(UNDO_MIN_INTERVAL=60s)，60秒内多次save只生成1次快照，
+    根除"1分钟10次save=10个2.5MB快照=25MB写入"的写入风暴。
     返回快照时间戳；无现存 state.json（首次写）或复制失败返回 None。
     由 save() 在覆盖前调用（save 持有锁，快照与覆盖天然串行）。
     """
     src = _ensure_dir(workspace_root) / STATE_FILE
     if not src.exists():
         return None
+    # 时间间隔控制：60秒内不重复生成快照
+    undo_dir = _undo_dir(workspace_root)
+    try:
+        snaps = sorted(undo_dir.glob("undo-*.json"))
+        if snaps and time.time() - snaps[-1].stat().st_mtime < UNDO_MIN_INTERVAL:
+            return None
+    except OSError:
+        pass
     # 微秒级唯一（macOS strftime 不支持 %f，手工拼微秒），避免同秒多次写互相覆盖快照
     ts = time.strftime("%Y%m%d%H%M%S") + f"{int(time.time() * 1_000_000) % 1_000_000:06d}"
-    dst = _undo_dir(workspace_root) / f"undo-{ts}.json"
+    dst = undo_dir / f"undo-{ts}.json"
     try:
         shutil.copy2(src, dst)
     except OSError:
         return None  # 快照失败不阻断写（fail-open，零爆破半径）
     # 轮转：仅保留最近 UNDO_KEEP 份
-    snaps = sorted(_undo_dir(workspace_root).glob("undo-*.json"))
+    snaps = sorted(undo_dir.glob("undo-*.json"))
     for old in snaps[:-UNDO_KEEP]:
         try:
             old.unlink()

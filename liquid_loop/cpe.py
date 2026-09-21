@@ -9,8 +9,42 @@ from .entropy import calculate
 import os
 import sys
 
+# ── 聚合型锚点豁免名单（2026-09-12 口径对齐 workspace.py:690）──────────────
+# distill / research_asset / principle 等锚点设计上聚合多主题资产，其证据之间的
+# keyword_overlap 平均一致度天然偏低——用同一 overlap 度量判"泛化崩塌"会系统性误报。
+# workspace.py 的冲突检测已豁免这 8 个锚点，而 cpe.scan_erosion 原先无豁免，
+# 属同一度量的双口径。此处对齐同一名单，仅作用于依赖 pairwise overlap 的
+# generalization_erosion 判定；retrospective_decay / behavioral_drift 不依赖
+# overlap，聚合锚点同样适用，故不受豁免影响。
+AGGREGATE_ANCHOR_NAMES = frozenset({
+    "distill", "research_asset", "tool_ref", "principle",
+    "harness-factor", "pattern", "metacontrol_flag", "pending_action",
+    # ── P3c（2026-09-12）统一口径补入：资产/类目汇集型锚点 ──────────────
+    # 判定依据（只读度量，见 output/P3c_步骤③锚点定论_2026-09-12.md）：
+    # 这些锚点名为集合/类目名词（非单一命题），证据天然跨主题汇集，其
+    # "两两词面重叠 <0.2" 由定义决定，不构成泛化崩塌信号。典型客观证据：
+    #   fact            n=313，严格阈值(0.25)下 C=28 微主题簇、最大簇占比 0.58
+    #   junshi_workflow n=591，C=80、最大簇 0.475、224 个主题标签、4 个写入者
+    #   军师调研         n=31，C=21、25 个主题标签、2 个写入者
+    #   research        n=52，C=46、40 个主题标签
+    #   marvis_lessons  n=19（19 条互异教训）、code n=6（6 段源码）、rule n=6（3 类规则）
+    #   marvis_rules n=12、quarantine n=39（隔离区多来源）、
+    #   distilled_evidence n=3、马维斯版军师调研 n=12
+    # 反向口径：单一命题型锚点（harness-factor 已单列、active_question /
+    # evolution_candidate / verification 等）若出现低重叠，仍判真实侵蚀、保留告警。
+    "fact", "junshi_workflow", "军师调研", "marvis_rules", "marvis_lessons",
+    "code", "rule", "distilled_evidence", "research", "quarantine",
+    "马维斯版军师调研",
+})
+
+
 class CPERegularizer:
     """CPE 正则化引擎：在证据添加前做能力保留裁决
+
+    v2.4 修正（2026-09-13）：
+    - P5: 修复 EVOLVE 死支 —— EVOLVE 不再嵌套在 risk>block 内，改由 evolve 阈值
+      独立把关（normal: block 0.7 / evolve 0.5），使"方向一致+低重叠"的扩展型
+      洞察真实可达；evolve_max=5 与观察期转正/拒绝机制保持不变。
 
     v2.3 补强（2026-09-01）：
     - P3: 场景感知（learning/normal），学习模式下阈值动态放宽
@@ -24,8 +58,12 @@ class CPERegularizer:
     """
 
     # 场景阈值配置：learning模式更宽松（允许更多演化），normal模式用默认
+    # P5（2026-09-13）：normal 的 evolve 原与 block 同为 0.7 —— 演进通道阈值被 block
+    #   覆盖而失效（且 EVOLVE 分支又嵌套在 risk>block 内 → 双重不可达）。
+    #   现让 evolve 独立取值 0.5：方向一致+低重叠的扩展型洞察 risk≈0.52~0.58 可达该
+    #   阈值 → 进入观察期；block=0.7 仅约束方向不一致的真漂移。
     _THRESHOLDS = {
-        "normal": {"block": 0.7, "evolve": 0.7, "flag": 0.4},
+        "normal": {"block": 0.7, "evolve": 0.5, "flag": 0.4},
         "learning": {"block": 0.85, "evolve": 0.55, "flag": 0.30},
     }
 
@@ -206,21 +244,30 @@ class CPERegularizer:
         evolve_thresh = thresholds["evolve"]
         flag_thresh = thresholds["flag"]
 
-        if risk_score > block_thresh:
-            if direction_consistency > 0.5:
-                # P4: EVOLVE灰色空间并发上限检查——防膨胀
-                active_evolve = self._count_active_evolve()
-                if active_evolve >= self.evolve_max:
-                    # 灰色空间已满：降级为FLAG（标记但不进入观察期），不膨胀
-                    action = "FLAG"
-                    reasons.append(f"EVOLVE空间已满({active_evolve}/{self.evolve_max})，降级为FLAG防膨胀")
-                else:
-                    # 方向一致但风险高 → 演化通道：临时写入观察
-                    action = "EVOLVE"
-                    reasons.append(f"演化通道({self.mode}模式): 方向一致但风险高，进入观察期（灰色空间{active_evolve+1}/{self.evolve_max}）")
+        # P5（2026-09-13）修正 evolve 死支：EVOLVE 不再嵌套在 risk>block 之下。
+        # 原死因：方向一致时 drift_score 被减半（<0.25 不加分）、protection_weight 降 70%
+        #   → risk 上界 ≈0.58 < block 0.7，EVOLVE 数学不可达（实测 20 例真实探针全落 FLAG、
+        #   0 例 EVOLVE）。现逻辑：扩展型洞察（方向一致 >0.5 且低重叠 <0.3）由 evolve_thresh
+        #   独立把关；block_thresh 只拦方向不一致的真漂移。evolve_max=5 与观察期转正/拒绝机制不变。
+        is_extension = direction_consistency > 0.5 and max_overlap < 0.3
+        if is_extension and risk_score >= evolve_thresh:
+            # P4: EVOLVE灰色空间并发上限检查——防膨胀
+            active_evolve = self._count_active_evolve()
+            if active_evolve >= self.evolve_max:
+                # 灰色空间已满：降级为FLAG（标记但不进入观察期），不膨胀
+                action = "FLAG"
+                reasons.append(f"EVOLVE空间已满({active_evolve}/{self.evolve_max})，降级为FLAG防膨胀")
             else:
-                # 方向不一致且风险高 → 真正的漂移，拦截
-                action = "BLOCK"
+                # 方向一致+低重叠的扩展型洞察 → 演化通道：临时写入观察
+                action = "EVOLVE"
+                reasons.append(
+                    f"演化通道({self.mode}模式): 方向一致性{direction_consistency:.2f}+低重叠"
+                    f"{max_overlap:.2f}，扩展型洞察进入观察期"
+                    f"（evolve阈值{evolve_thresh}，灰色空间{active_evolve+1}/{self.evolve_max}）"
+                )
+        elif risk_score > block_thresh:
+            # 方向不一致且风险高 → 真正的漂移，拦截
+            action = "BLOCK"
         elif risk_score > flag_thresh:
             action = "FLAG"
         else:
@@ -237,6 +284,11 @@ class CPERegularizer:
                 "direction_consistency": round(direction_consistency, 3),
                 "protection_weight": round(protection_weight, 3),
                 "existing_evidence_count": len(evs),
+                # P5：阈值与实际判定依据显式化（审计用，不参与打分）
+                "block_threshold": block_thresh,
+                "evolve_threshold": evolve_thresh,
+                "flag_threshold": flag_thresh,
+                "is_extension": is_extension,
             }
         }
 
@@ -283,6 +335,10 @@ class CPERegularizer:
                 })
 
             # 泛化崩塌：证据间平均重叠度
+            # 聚合型锚点豁免（口径与 workspace.py:690 一致，见 AGGREGATE_ANCHOR_NAMES）：
+            # 该类锚点天然跨主题汇集，两两重叠度低属设计使然，不构成侵蚀信号。
+            if a.name in AGGREGATE_ANCHOR_NAMES:
+                continue
             content_pairs = []
             for i in range(len(evs)):
                 for j in range(i + 1, len(evs)):

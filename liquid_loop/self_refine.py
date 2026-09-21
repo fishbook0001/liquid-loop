@@ -34,18 +34,20 @@ class SelfRefineEngine:
             # 差异化策略：从证据内容中提取关键词做问题
             words = _tokenize(e.content)
             kw_question = " ".join(words[:5]) if words else ""
+            # 答案取证据内容的关键片段（前80字），避免完整内容过长导致verify命中率低
+            answer_snippet = e.content[:80] if len(e.content) > 80 else e.content
             if len(kw_question) > 10:
                 probes.append({
                     "type": "fact",
                     "question": f"关于{anchor_name}，{kw_question}是什么？",
-                    "answer": e.content,
+                    "answer": answer_snippet,
                     "source_id": e.id,
                 })
             else:
                 probes.append({
                     "type": "fact",
                     "question": f"关于{anchor_name}有什么已知信息？",
-                    "answer": e.content,
+                    "answer": answer_snippet,
                     "source_id": e.id,
                 })
         for rel in self.state.relations:
@@ -95,14 +97,18 @@ class SelfRefineEngine:
             return {"passed": False, "question": question, "gold": gold, "source": source_id, "retrieved": [], "reason": "检索失败，无相关记忆"}
 
         answer = " ".join(retrieved)
-        passed = _judge_answer(gold, answer)
+        passed, confidence = _judge_answer(gold, answer)
+        # 双判据：passed=True 且 confidence >= 0.3 才算真正通过
+        # （防止边界case：刚好0.3命中但实际语义不相关）
+        verified = passed and confidence >= 0.3
         return {
-            "passed": passed,
+            "passed": verified,
+            "confidence": confidence,
             "question": question,
             "gold": gold,
             "source": source_id,
             "retrieved": retrieved[:3],
-            "reason": "通过" if passed else f"关键词不匹配，gold={gold[:40]}",
+            "reason": "通过" if verified else f"关键词不匹配(conf={confidence})，gold={gold[:40]}",
         }
 
     def repair(self, failures: List[Dict[str, Any]]) -> List[str]:
@@ -172,7 +178,12 @@ class SelfRefineEngine:
           reason     推理失败（检索到但判断不中）   → 策略侧 downweight_noise
         """
         reason = failure.get("reason", "")
-        if "检索" in reason or "无相关" in reason:
+        # 判据修正（2026-09-21 Vera 审计）：原判据把「关键词不匹配」错误归入 retrieval，
+        # 但 docstring 明确 reason=「检索到但判断不中」——"关键词不匹配"正是判断不中的
+        # 描述（verify() 产出文案 f"关键词不匹配(conf=...)..."），归 retrieval 会让 SEAL
+        # 策略系统性走错（该 downweight_noise 的却 boost_stability）。
+        # 仅"确实没检索到"的语义（检索/无相关/未找到）才归 retrieval。
+        if "检索" in reason or "无相关" in reason or "未找到" in reason:
             fail_type = "retrieval"
         else:
             fail_type = "reason"
@@ -221,12 +232,21 @@ class SelfRefineEngine:
         repairs = self.repair(failures)
         # SEAL 双优化 - 策略侧：诊断失败 → 调锚点 stability
         diagnoses = [self.diagnose(f) for f in failures]
-        strategy_actions = []
+        # 精修：同一锚点只调整一次，避免多次失败导致权重震荡
+        seen_anchors = set()
+        unique_diagnoses = []
         for d in diagnoses:
+            anchor = d.get("target_anchor")
+            if anchor and anchor not in seen_anchors:
+                seen_anchors.add(anchor)
+                unique_diagnoses.append(d)
+        strategy_actions = []
+        for d in unique_diagnoses:
             strategy_actions.extend(self.apply_strategy(d))
         self.state.self_refine_probes = probes
         self.state.self_refine_results = results
-        self.state.self_refine_repair_count += len(repairs)
+        # 修复计数 = 内容修复(repairs) + 策略修复(strategy_actions)，两者都是对失败的实际修复动作
+        self.state.self_refine_repair_count += len(repairs) + len(strategy_actions)
         return {"total": len(probes), "passed": passed, "failed": len(failures), "pass_rate": round(passed / len(probes), 2), "repairs": repairs, "diagnoses": diagnoses, "strategy_actions": strategy_actions, "failed_details": [{"q": r.get("question", "")[:60], "reason": r.get("reason", "")} for r in failures[:5]]}
 
 def meta_thinker_evaluate(state: WorkspaceState) -> Dict[str, Any]:

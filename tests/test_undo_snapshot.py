@@ -3,6 +3,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -48,6 +49,11 @@ class TestUndoSnapshot(unittest.TestCase):
         snaps = list_undo(self.root)
         self.assertEqual(len(snaps), 1)
         ts = snaps[0]["ts"]
+        # 2026-09-21 同步：storage 新增 UNDO_MIN_INTERVAL=60s 节流（防写入风暴），
+        # 60 秒内不重复生成快照。把已有快照 mtime 回拨 61s 模拟"上次快照已过期"，
+        # 使 restore 前的自动快照（后悔药套后悔药）能正常生成。
+        _past = time.time() - 61
+        os.utime(snaps[0]["path"], (_past, _past))
         r = restore_undo(self.root, ts)
         self.assertTrue(r["ok"])
         st = load(self.root)

@@ -66,8 +66,10 @@ def test_guard_skips_small_workspace():
 
 
 def test_guard_ratio_constant():
-    assert GUARD_RATIO == 0.1 and GUARD_MIN == 50
-    print("[PASS] 阈值常量 GUARD_RATIO=0.1 GUARD_MIN=50")
+    # 2026-09-21 同步：GUARD_MIN 由 50 降为 10（storage.py 坑37修复"保护小工作区"），
+    # 常量语义 = 「磁盘全量达此值才启用护栏」，值越小护栏启用越早（对小库更安全）。
+    assert GUARD_RATIO == 0.1 and GUARD_MIN == 10
+    print("[PASS] 阈值常量 GUARD_RATIO=0.1 GUARD_MIN=10")
 
 
 if __name__ == "__main__":
