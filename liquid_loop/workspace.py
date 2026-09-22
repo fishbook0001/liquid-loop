@@ -1498,6 +1498,17 @@ class WorkspaceState:
                 aj = act[j]
                 if aj.id in skip:
                     continue
+                # 名称相似度是合并主门（缺5·merge 修正 2026-09-22）：
+                # 旧实现用 name+description 的 Jaccard/keyword_overlap，被 CJK 字符级
+                # token + 共享描述模板("MARVIS X 记忆锚点")污染——所有锚点对齐首锚得
+                # 恒定 0.833，会误并 52 个互异锚点。同名/近名=同概念才该合并。
+                name_a = (ai.name or "").strip()
+                name_b = (aj.name or "").strip()
+                if not name_a or not name_b:
+                    continue
+                name_sim = _jaccard(name_a, name_b)
+                if name_sim < ANCHOR_MERGE_SIM:
+                    continue
                 sa = (ai.name + " " + ai.description).strip()
                 sb = (aj.name + " " + aj.description).strip()
                 if not sa or not sb:
@@ -1510,7 +1521,8 @@ class WorkspaceState:
                             ev = next((e for e in self.evidences if e.id == eid), None)
                             if ev:
                                 ev.anchor_id = ai.id
-                    merged.append({"keep": ai.id, "absorb": aj.id, "score": round(score, 3)})
+                    merged.append({"keep": ai.id, "absorb": aj.id,
+                                   "name_sim": round(name_sim, 3), "score": round(score, 3)})
                     skip.add(aj.id)
         return {"merged": merged, "applied": 0 if dry_run else len(merged), "dry_run": dry_run}
 

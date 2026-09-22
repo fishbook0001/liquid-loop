@@ -122,6 +122,32 @@ def test_merge_similar_anchors_dry_and_apply():
     assert all(e.anchor_id == a1.id for e in s.evidences if e.id in a1.evidence_ids)
 
 
+def test_merge_dissimilar_anchors_not_merged():
+    """回归：互异名称锚点（即便共享描述模板）绝不误并。
+
+    2026-09-22 发现的 bug：旧实现用 name+description 的 Jaccard，被 CJK 字符级
+    token + 共享模板("MARVIS X 记忆锚点")污染，所有锚点对齐首锚得恒定 0.833，
+    会误并 52 个互异锚点。修正后合并主门=名称相似度，互异名→不合并。
+    """
+    s = WorkspaceState()
+    # 共享描述模板(模拟线上 MARVIS X 记忆锚点)，但名称互异
+    a1 = s.add_anchor("fact", description="MARVIS fact 记忆锚点")
+    a2 = s.add_anchor("harness-intercept", description="MARVIS harness-intercept 记忆锚点")
+    a3 = s.add_anchor("ops-log", description="MARVIS ops-log 记忆锚点")
+    s.add_evidence(a1.id, "e1")
+    s.add_evidence(a2.id, "e2")
+    s.add_evidence(a3.id, "e3")
+    r = s.merge_similar_anchors(dry_run=False)
+    assert r["applied"] == 0, f"互异锚点被误并: {r['merged']}"
+    assert all(not a.archived for a in s.anchors)
+    # 同名仍应合并（不被名称门误伤）
+    b1 = s.add_anchor("dup核心", description="X")
+    b2 = s.add_anchor("dup核心", description="X")
+    r2 = s.merge_similar_anchors(dry_run=False)
+    assert r2["applied"] == 1
+
+
+
 def test_split_oversized_anchors():
     s = WorkspaceState()
     a = s.add_anchor("巨型锚点")
