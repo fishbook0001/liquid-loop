@@ -70,7 +70,7 @@ LIFECYCLE_FLOOR_WEIGHT, LIFECYCLE_TTL_EPS = _derive_lifecycle_thresholds()
 # 默认保守：新锚点 TTL=0(永不过期，向后兼容)；死锚点归档须高陈旧度地板+零证据零访问；
 # 所有"写"类 sweep 默认 dry_run=True，须经显式 apply 才落盘，防不可逆误操作。
 ANCHOR_STALE_FLOOR = 0.85    # 陈旧度≥此值 且 零证据零访问 → 判定死锚点候选
-ANCHOR_SPLIT_CAP = 50        # 单锚点 evidence 超此数 → 触发分裂
+ANCHOR_SPLIT_CAP = 100       # 单锚点 evidence 超此数 → 触发分裂（原50，提高减少碎片）
 ANCHOR_MERGE_SIM = 0.6       # 相似度≥此值 → 相似锚点可合并（禁向量：关键词重叠+Jaccard）
 ANCHOR_DEAD_GRACE_DAYS = 30   # 死锚点归档最低年龄门槛(天)：防误冻新建未挂证据的锚点
 
@@ -267,14 +267,20 @@ class Anchor:
         other.superseded_by = self.id
         other.liquidity = "archived"
 
-    def split_partition(self, cap: int = ANCHOR_SPLIT_CAP) -> list:
-        """过大锚点分裂（缺5·split）：把 evidence_ids 按 cap 切片，返回子分组(纯函数)。
+    def split_partition(self, cap: int = ANCHOR_SPLIT_CAP, evidences: Optional[list] = None) -> list:
+        """过大锚点分裂（缺5·split）：按时间排序后顺序切片，保证时间局部性。
 
+        若传入 evidences，先按 timestamp 排序再切片；否则直接按 evidence_ids 顺序切片。
         不直接改状态——由 WorkspaceState.split_oversized_anchors 据返回创建子锚点，
         父锚点保留(置 split_from 血缘)供审计，不物理删。
         """
         ids = list(self.evidence_ids)
-        return [ids[i:i + cap] for i in range(0, len(ids), cap)] if ids else []
+        if not ids:
+            return []
+        if evidences:
+            ev_map = {e.id: e for e in evidences}
+            ids.sort(key=lambda eid: getattr(ev_map.get(eid), 'timestamp', ''))
+        return [ids[i:i + cap] for i in range(0, len(ids), cap)]
 
 
 @dataclass
@@ -1538,7 +1544,7 @@ class WorkspaceState:
         for a in self.active_anchors():
             if len(a.evidence_ids) <= cap:
                 continue
-            parts = a.split_partition(cap)
+            parts = a.split_partition(cap, evidences=self.evidences)
             split_info.append({"anchor": a.id, "n_parts": len(parts), "evidence": len(a.evidence_ids)})
             if not dry_run:
                 for idx, part in enumerate(parts[1:], start=1):  # parts[0] 留守父锚点
