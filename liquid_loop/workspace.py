@@ -318,6 +318,8 @@ class Evidence:
     evolve_status: str = ""  # 空=正式证据 / "observing"=演化观察期中 / "graduated"=观察期通过转正 / "rejected"=观察期内被证明漂移已移除
     evolve_observe_until: str = ""  # 观察期截止时间戳（ISO格式），空=无观察期
     evolve_recall_hits: int = 0  # 观察期内被召回次数（≥3次且stability稳定→转正）
+    # ── d763落地：证据优先级（先分类再压缩，结论/依据/限制默认保留）──
+    priority: int = 0  # 0=普通,1=重要,2=关键；容量满时高优先级保留更久
 
 
 @dataclass
@@ -586,7 +588,8 @@ class WorkspaceState:
 
     def add_evidence(self, anchor, content: str, quality: float = 1.0, agent_id: str = "",
                      dedup: bool = False, relation: str = "support",
-                     target_memory_id: str = "", principle: str = "") -> Optional[Evidence]:
+                     target_memory_id: str = "", principle: str = "",
+                     priority: int = 0) -> Optional[Evidence]:
         """向指定锚点添加一条证据。
 
         anchor 参数兼容：锚点名称(str) | 锚点ID(str) | Anchor对象
@@ -621,6 +624,7 @@ class WorkspaceState:
             quality=quality, timestamp=now(), agent_id=agent_id,
             relation=relation, target_memory_id=target_memory_id,
             added_iter=self._iteration, principle=principle,
+            priority=priority,
         )
         self.evidences.append(e)
         target.evidence_ids.append(e.id)
