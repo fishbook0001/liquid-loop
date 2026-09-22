@@ -12,7 +12,7 @@ from .guard import validate_content
 
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Dict, Any
 import uuid
 from pathlib import Path
@@ -65,6 +65,15 @@ LiquidityLevel = str  # "hot" | "warm" | "cold" | "frozen"
 # 导出常量（沿用现状默认值，向后兼容测试与实战零误冻）
 LIFECYCLE_FLOOR_WEIGHT, LIFECYCLE_TTL_EPS = _derive_lifecycle_thresholds()
 
+# ── 锚点生命周期机制补强（飞哥 2026-09-22 拍板·全量深做）──
+# 守同一铁律：零丢失(archived≠删) / 可审计(archived_at) / 禁向量 / 向后兼容(默认保守)。
+# 默认保守：新锚点 TTL=0(永不过期，向后兼容)；死锚点归档须高陈旧度地板+零证据零访问；
+# 所有"写"类 sweep 默认 dry_run=True，须经显式 apply 才落盘，防不可逆误操作。
+ANCHOR_STALE_FLOOR = 0.85    # 陈旧度≥此值 且 零证据零访问 → 判定死锚点候选
+ANCHOR_SPLIT_CAP = 50        # 单锚点 evidence 超此数 → 触发分裂
+ANCHOR_MERGE_SIM = 0.6       # 相似度≥此值 → 相似锚点可合并（禁向量：关键词重叠+Jaccard）
+ANCHOR_DEAD_GRACE_DAYS = 30   # 死锚点归档最低年龄门槛(天)：防误冻新建未挂证据的锚点
+
 
 @dataclass
 class Anchor:
@@ -85,6 +94,18 @@ class Anchor:
     conflict_penalty: float = 1.0  # 冲突惩罚累积乘子（Layer-1 修复：持久化，recalc/step/load 后保留）
     # ── v1.3 因果演化循环成核：因果边（符号化，守禁向量）──
     causal: dict = field(default_factory=dict)  # {causes,caused_by,enables,contradicts} -> list[node_id]
+    # ── 锚点生命周期机制补强（2026-09-22）──
+    ttl_days: float = 0.0            # 锚点寿命(天)；0=永不过期(向后兼容默认)
+    expires_at: str = ""             # 成核时若 ttl_days>0 则算；空=无期限
+    version_hash: str = ""           # 成核时状态哈希快照（缺3·异步RL old-logits 一致性基准）
+    archived: bool = False           # 死锚点冷归档（零丢失，recall/合并/分裂活跃集跳过）
+    archived_at: str = ""            # 归档时间戳（可审计）
+    superseded_by: str = ""          # 被哪条锚点合并取代（零丢失血缘）
+    merged_from: list = field(default_factory=list)  # 合并来源锚点 id 列表（血缘）
+    split_from: str = ""             # 分裂父锚点 id（血缘）
+    staleness_score: float = 0.0      # 常驻陈旧度 = f(时间,访问,证据质量)（缺4·重构非重写）
+    last_probed: str = ""             # 主动探活时间戳（缺2）
+    liveness: str = "unknown"         # active / dormant / dead / unknown（缺2）
 
     def decay_value(self, factor: float = 0.95, evidence_count: int = 0) -> float:
         if not self.created_at:
@@ -141,11 +162,126 @@ class Anchor:
                 sys.stderr.write(f"[workspace:warn] liquidity日期解析失败: {_e}\n")
         return {"value_density": self.value_density, "cognitive_stage": self.cognitive_stage, "liquidity": self.liquidity}
 
+    # ===== 锚点生命周期机制补强（2026-09-22 飞哥拍板·全量深做） =====
+    # 守铁律：零丢失(archived≠删) / 可审计(archived_at) / 禁向量 / 向后兼容(默认保守)。
+
+    def snapshot_version(self) -> str:
+        """成核/重大变更时记录锚点状态哈希（缺3·异步RL old-logits 一致性基准）。
+
+        哈希覆盖：name/description/evidence_ids/value_score/anchor_strength/created_at。
+        证据采集时把此刻的 version_hash 写入 Evidence.anchor_version_hash；
+        后续若锚点被合并/分裂/重算导致哈希漂移，即可检测"证据针对的是旧版本锚点"。
+        """
+        canon = json.dumps({
+            "name": self.name,
+            "desc": self.description,
+            "ev": sorted(self.evidence_ids),
+            "vs": round(self.value_score, 3),
+            "st": round(self.anchor_strength, 3),
+            "ca": self.created_at,
+        }, sort_keys=True, ensure_ascii=False)
+        return hashlib.sha256(canon.encode("utf-8")).hexdigest()[:16]
+
+    def recalc_staleness(self, ref_dt=None) -> float:
+        """常驻陈旧度评分 = f(时间衰减, 访问频率, 证据质量)（缺4·重构而非重写）。
+
+        复用现有 liquidity/time_score 语义，固化为独立可排序字段：
+          时间因子 = 1 - 上次访问距今/180d（无访问→最旧）
+          访问因子 = min(access_count/10, 1)
+          证据因子 = min(len(evidence_ids)/5, 1)（数量代理质量，禁向量）
+          staleness = 1 - (0.5*时间 + 0.3*访问 + 0.2*证据)，夹 [0,1]。
+        高=陈旧(死锚点候选)，低=鲜活。
+        """
+        ref = ref_dt or datetime.now(timezone.utc)
+        if self.last_accessed:
+            try:
+                last = datetime.fromisoformat(self.last_accessed)
+                gap_days = (ref - last).total_seconds() / 86400.0
+            except ValueError:
+                gap_days = 9999.0
+        else:
+            gap_days = 9999.0
+        time_factor = max(0.0, 1.0 - gap_days / 180.0)
+        access_factor = min(self.access_count / 10.0, 1.0)
+        evidence_factor = min(len(self.evidence_ids) / 5.0, 1.0)
+        freshness = 0.5 * time_factor + 0.3 * access_factor + 0.2 * evidence_factor
+        self.staleness_score = round(max(0.0, min(1.0, 1.0 - freshness)), 4)
+        return self.staleness_score
+
+    def age_days(self, ref_dt=None) -> float:
+        """锚点年龄（天）：created_at → ref。空 created_at 视为极老(9999)以便归档。"""
+        if not self.created_at:
+            return 9999.0
+        try:
+            c = datetime.fromisoformat(self.created_at)
+            if c.tzinfo is None:
+                c = c.replace(tzinfo=timezone.utc)
+            return max(0.0, (ref_dt or datetime.now(timezone.utc) - c).total_seconds() / 86400.0)
+        except ValueError:
+            return 9999.0
+
+    def is_expired(self, ref_dt=None) -> bool:
+        """锚点是否超 TTL（缺1）。expires_at 空=无期限→永不真。"""
+        if not self.expires_at:
+            return False
+        try:
+            exp = datetime.fromisoformat(self.expires_at)
+            if exp.tzinfo is None:
+                exp = exp.replace(tzinfo=timezone.utc)
+            return exp <= (ref_dt or datetime.now(timezone.utc))
+        except ValueError:
+            return False
+
+    def probe(self, ref_dt=None) -> str:
+        """主动探活（缺2）：刷新 last_probed 并据陈旧度定级 liveness。
+
+        区别于 guard.env_anchor_probe（那是安全门对环境断言 curl/ps 探活，与此无关）。
+        本方法仅对记忆锚点自身做活跃度巡检，不触外部系统。
+        返回 liveness 等级：active / dormant / dead。
+        """
+        self.last_probed = (ref_dt or datetime.now(timezone.utc)).isoformat()
+        self.recalc_staleness(ref_dt)
+        if self.staleness_score >= ANCHOR_STALE_FLOOR:
+            self.liveness = "dead"
+        elif self.staleness_score >= 0.6:
+            self.liveness = "dormant"
+        else:
+            self.liveness = "active"
+        return self.liveness
+
+    def merge_with(self, other: "Anchor") -> None:
+        """相似锚点聚合合并（缺5·merge）：吸收 other 的证据与血缘，other 冷归档。
+
+        零丢失：other 不删，置 archived + superseded_by=本锚点 + 反向 merged_from，
+        可被解冻审计。证据取并集(上限保护)，强度重算。
+        Evidence.anchor_id 重指派由 WorkspaceState.merge_similar_anchors 负责。
+        """
+        if other is self:
+            return
+        self.evidence_ids = sorted(set(self.evidence_ids) | set(other.evidence_ids))
+        self.merged_from.append(other.id)
+        self.value_score = round((self.value_score + other.value_score) / 2.0, 4)
+        self.recalc_strength(len(self.evidence_ids))
+        other.archived = True
+        other.archived_at = datetime.now(timezone.utc).isoformat()
+        other.superseded_by = self.id
+        other.liquidity = "archived"
+
+    def split_partition(self, cap: int = ANCHOR_SPLIT_CAP) -> list:
+        """过大锚点分裂（缺5·split）：把 evidence_ids 按 cap 切片，返回子分组(纯函数)。
+
+        不直接改状态——由 WorkspaceState.split_oversized_anchors 据返回创建子锚点，
+        父锚点保留(置 split_from 血缘)供审计，不物理删。
+        """
+        ids = list(self.evidence_ids)
+        return [ids[i:i + cap] for i in range(0, len(ids), cap)] if ids else []
+
 
 @dataclass
 class Evidence:
     id: str = field(default_factory=uid)
     anchor_id: str = ""
+    anchor_version_hash: str = ""  # 证据采集时所属锚点的 version_hash 快照（缺3·old-logits 一致性对照基准）
     content: str = ""
     timestamp: str = field(default_factory=now)
     weight: float = 1.0
@@ -422,13 +558,22 @@ class WorkspaceState:
     def add_anchor(self, name: str, description: str = "",
                    value_density: str = "medium",
                    cognitive_stage: str = "raw",
-                   liquidity: str = "warm") -> Anchor:
-        """创建并添加一个新锚点"""
+                   liquidity: str = "warm",
+                   ttl_days: float = 0.0) -> Anchor:
+        """创建并添加一个新锚点。
+
+        ttl_days: 锚点寿命(天)；0=永不过期(向后兼容默认)。>0 则离现算 expires_at。
+        成核即记录 version_hash 状态快照(缺3 old-logits 基准) + 初始陈旧度(缺4)。
+        """
         a = Anchor(
             id=uid(), name=name, description=description,
             value_density=value_density, cognitive_stage=cognitive_stage,
-            liquidity=liquidity,
+            liquidity=liquidity, ttl_days=ttl_days,
         )
+        if ttl_days > 0:
+            a.expires_at = (datetime.now(timezone) + timedelta(days=ttl_days)).isoformat()
+        a.version_hash = a.snapshot_version()
+        a.recalc_staleness()
         self.anchors.append(a)
         self.updated_at = now()
         return a
@@ -466,6 +611,7 @@ class WorkspaceState:
                     return ex
         e = Evidence(
             id=uid(), anchor_id=target.id, content=content,
+            anchor_version_hash=target.version_hash,
             quality=quality, timestamp=now(), agent_id=agent_id,
             relation=relation, target_memory_id=target_memory_id,
             added_iter=self._iteration, principle=principle,
@@ -1261,6 +1407,150 @@ class WorkspaceState:
     def lifecycle_sweep(self) -> dict:
         """公开老化回收入口（供 8790 手动/定时触发，或测试）。"""
         return self._lifecycle_sweep()
+
+    # ===== 锚点生命周期机制补强（2026-09-22 飞哥拍板·全量深做） =====
+    # 守铁律：零丢失(archived≠删) / 可审计(archived_at) / 禁向量 /
+    # 所有"写"类方法默认 dry_run=True，须经显式 apply 才落盘，防不可逆误操作。
+
+    def active_anchors(self) -> list:
+        """返回未归档(活跃)锚点列表（recall/合并/分裂的活跃集过滤）。"""
+        return [a for a in self.anchors if not a.archived]
+
+    def recompute_staleness_all(self) -> int:
+        """周期重算全部活跃锚点的常驻陈旧度（缺4·主动重算钩子）。"""
+        n = 0
+        for a in self.active_anchors():
+            a.recalc_staleness()
+            n += 1
+        if n:
+            self.updated_at = now()
+        return n
+
+    def probe_anchors(self) -> dict:
+        """主动探活全部活跃锚点（缺2·定期巡检入口）。返回各级计数。"""
+        counts = {"active": 0, "dormant": 0, "dead": 0, "unknown": 0}
+        for a in self.active_anchors():
+            lv = a.probe()
+            counts[lv] = counts.get(lv, 0) + 1
+        self.updated_at = now()
+        return counts
+
+    def anchor_version_drift(self) -> list:
+        """检测 old-logits 不一致（缺3）：证据采集时锚点版本 ≠ 当前锚点版本。
+
+        返回漂移证据 id 列表。用于识别"证据针对的是已被合并/分裂/重算改写的旧锚点"。
+        """
+        drift = []
+        ver_by_id = {a.id: a.version_hash for a in self.anchors}
+        for e in self.evidences:
+            if e.archived:
+                continue
+            h = getattr(e, "anchor_version_hash", "")
+            if h and h != ver_by_id.get(e.anchor_id, ""):
+                drift.append(e.id)
+        return drift
+
+    def anchor_lifecycle_sweep(self, dry_run: bool = True) -> dict:
+        """死锚点冷归档（缺1+缺4 联合驱动）：TTL 过期 或 (高陈旧度且零证据零访问)。
+
+        守铁律：archived≠删；零丢失可解冻；archived_at 留痕。
+        默认 dry_run=True（只报告候选，不落盘）——须经显式 apply 才改共享状态，
+        防不可逆误操作（红线#硬不可逆）。
+        """
+        candidates = []
+        for a in self.active_anchors():
+            a.recalc_staleness()
+            expired = a.is_expired()
+            dead = (a.staleness_score >= ANCHOR_STALE_FLOOR
+                    and a.access_count == 0
+                    and len(a.evidence_ids) == 0
+                    and a.age_days() >= ANCHOR_DEAD_GRACE_DAYS)
+            if expired or dead:
+                candidates.append(a.id)
+        if dry_run or not candidates:
+            return {"would_archive": candidates, "applied": 0, "dry_run": dry_run}
+        ts = now()
+        for aid in candidates:
+            a = next((x for x in self.anchors if x.id == aid), None)
+            if a and not a.archived:
+                a.archived = True
+                a.archived_at = ts
+                a.liquidity = "archived"
+        self.updated_at = ts
+        return {"would_archive": candidates, "applied": len(candidates), "dry_run": False}
+
+    def merge_similar_anchors(self, threshold: float = ANCHOR_MERGE_SIM,
+                              dry_run: bool = True) -> dict:
+        """相似锚点主动聚合（缺5·merge，区别于 cpe 冲突 MERGE）。
+
+        用禁向量相似度(关键词重叠+Jaccard，复用 adaptive_crystallization 原语)判定；
+        evidence 并集上限保护，避免无界膨胀。默认 dry_run。
+        """
+        from .adaptive_crystallization import _keyword_overlap, _jaccard
+        act = self.active_anchors()
+        merged = []
+        skip = set()
+        for i in range(len(act)):
+            ai = act[i]
+            if ai.id in skip:
+                continue
+            for j in range(i + 1, len(act)):
+                aj = act[j]
+                if aj.id in skip:
+                    continue
+                sa = (ai.name + " " + ai.description).strip()
+                sb = (aj.name + " " + aj.description).strip()
+                if not sa or not sb:
+                    continue
+                score = max(_keyword_overlap(sa, sb), _jaccard(sa, sb))
+                if score >= threshold:
+                    if not dry_run:
+                        ai.merge_with(aj)
+                        for eid in aj.evidence_ids:
+                            ev = next((e for e in self.evidences if e.id == eid), None)
+                            if ev:
+                                ev.anchor_id = ai.id
+                    merged.append({"keep": ai.id, "absorb": aj.id, "score": round(score, 3)})
+                    skip.add(aj.id)
+        return {"merged": merged, "applied": 0 if dry_run else len(merged), "dry_run": dry_run}
+
+    def split_oversized_anchors(self, cap: int = ANCHOR_SPLIT_CAP,
+                                dry_run: bool = True) -> dict:
+        """过大锚点分裂（缺5·split）：evidence 超 cap 的锚点拆为子锚点。
+
+        父锚点保留(置 split_from 血缘)，子锚点继承 description + 切片 evidence_ids；
+        移动的证据其 Evidence.anchor_id 重指派到子锚点，保持双向一致。零丢失，可审计。
+        默认 dry_run。
+        """
+        split_info = []
+        for a in self.active_anchors():
+            if len(a.evidence_ids) <= cap:
+                continue
+            parts = a.split_partition(cap)
+            split_info.append({"anchor": a.id, "n_parts": len(parts), "evidence": len(a.evidence_ids)})
+            if not dry_run:
+                for idx, part in enumerate(parts[1:], start=1):  # parts[0] 留守父锚点
+                    child = Anchor(
+                        id=uid(), name=f"{a.name}#{idx}", description=a.description,
+                        value_density=a.value_density, cognitive_stage=a.cognitive_stage,
+                        liquidity=a.liquidity,
+                    )
+                    child.evidence_ids = list(part)
+                    child.split_from = a.id
+                    child.version_hash = child.snapshot_version()
+                    child.recalc_staleness()
+                    for eid in part:
+                        ev = next((e for e in self.evidences if e.id == eid), None)
+                        if ev:
+                            ev.anchor_id = child.id
+                    self.anchors.append(child)
+                a.evidence_ids = list(parts[0])       # 父锚点只留守第一部分，避免与子锚点重复
+                a.split_from = a.split_from or a.id  # 标记已分裂(父)
+        if split_info and not dry_run:
+            self.updated_at = now()
+        return {"split": split_info,
+                "applied": 0 if dry_run else sum(s["n_parts"] - 1 for s in split_info),
+                "dry_run": dry_run}
 
     def recall(self, query: str, agent_id: str = "", top_k: int = 5):
         """统一召回入口（封装 RAR 倒排索引）+ 自动 register_recall。
