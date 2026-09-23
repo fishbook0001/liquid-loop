@@ -31,6 +31,31 @@ from .cognitive_budget import CognitiveBudgetStabilizer
 
 
 
+# ========== 共识参与者白名单守卫（2026-09-23 可选，fail-open）==========
+_CONSENSUS_PARTY_CACHE = "UNSET"  # "UNSET"→未加载；None→加载失败(允许全部)；set→白名单
+
+def _load_consensus_parties():
+    """读取共识参与方白名单（distill_registry.json agents.is_consensus_party=true）。
+
+    返回 set(agent_id) 或 None（文件缺失/不可读 → fail-open：允许全部，不告警不拒绝）。
+    结果缓存于模块级；registry 变更需随 8790 进程 reload 生效。
+    """
+    global _CONSENSUS_PARTY_CACHE
+    if _CONSENSUS_PARTY_CACHE != "UNSET":
+        return _CONSENSUS_PARTY_CACHE
+    p = os.path.expanduser("~/.workbuddy/distill/distill_registry.json")
+    try:
+        with open(p, encoding="utf-8") as _f:
+            _data = json.load(_f)
+        _agents = _data.get("agents", []) or []
+        _parties = {a["agent_id"] for a in _agents if a.get("is_consensus_party")}
+        _CONSENSUS_PARTY_CACHE = _parties
+        return _parties
+    except Exception:
+        _CONSENSUS_PARTY_CACHE = None
+        return None
+
+
 # ========== 链式哈希审计（借鉴 KFG MemoryGovernance）==========
 
 
@@ -708,6 +733,20 @@ class WorkspaceState:
         for content, owners in owners_by_content.items():
             if len(owners) < 2:
                 continue
+            # ── 共识参与者白名单守卫（2026-09-23 可选，fail-open）──
+            # 默认仅告警（保持现状）；LIQUID_CONSENSUS_ENFORCE=1 时硬拒非白名单 agent 成核
+            _parties = _load_consensus_parties()
+            if _parties is not None:
+                _non = owners - _parties
+                if _non:
+                    if os.environ.get("LIQUID_CONSENSUS_ENFORCE") == "1":
+                        logging.getLogger("liquid_loop.workspace").warning(
+                            "[consensus-guard] 拒绝非白名单 agent %s 形成共识(content=%s)，已降级",
+                            sorted(_non), content[:40])
+                        continue
+                    logging.getLogger("liquid_loop.workspace").warning(
+                        "[consensus-guard] 非白名单 agent %s 参与共识(仅告警, fail-open)(content=%s)",
+                        sorted(_non), content[:40])
             # 已存在的共识结晶：把新一致方并入 contributors（动态扩展，支撑三方+ CCI 计量）
             existing = next((m for m in self.memories if m.scope in ("consensus", "authority_direct") and m.content == content), None)
             if existing is not None:
