@@ -6,7 +6,7 @@
 空间远大于 LME），复用 run_locomo 的 collect_turns/build_ss/TfidfBaseline 保证口径一致。
 验证零向量 lexical 信号（containment 融合 / 实体·数字精确加权）能否让 liquid 超越词频基线。
 """
-import sys, os, json, re, math
+import sys, os, json, re
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))

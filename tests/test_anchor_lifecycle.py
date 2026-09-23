@@ -3,13 +3,12 @@
 覆盖：缺1 TTL/寿命、缺2 主动探活、缺3 版本快照(old-logits)、
 缺4 陈旧度常驻评分、缺5 合并/分裂；以及零丢失 / 向后兼容 / dry-run 安全。
 """
-import pytest
 import tempfile
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 from liquid_loop.workspace import (
-    WorkspaceState, Anchor, Evidence, now,
+    WorkspaceState, Anchor, now,
     ANCHOR_STALE_FLOOR, ANCHOR_DEAD_GRACE_DAYS, ANCHOR_SPLIT_CAP,
 )
 from liquid_loop.storage import save, load
@@ -140,9 +139,9 @@ def test_merge_dissimilar_anchors_not_merged():
     r = s.merge_similar_anchors(dry_run=False)
     assert r["applied"] == 0, f"互异锚点被误并: {r['merged']}"
     assert all(not a.archived for a in s.anchors)
-    # 同名仍应合并（不被名称门误伤）
-    b1 = s.add_anchor("dup核心", description="X")
-    b2 = s.add_anchor("dup核心", description="X")
+    # 同名仍应合并（不被名称门误伤）——两次 add_anchor 的**副作用**是断言前提，赋值无用
+    s.add_anchor("dup核心", description="X")
+    s.add_anchor("dup核心", description="X")
     r2 = s.merge_similar_anchors(dry_run=False)
     assert r2["applied"] == 1
 

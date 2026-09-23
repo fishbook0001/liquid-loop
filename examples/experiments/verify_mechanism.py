@@ -2,12 +2,11 @@
 直接调用机制层函数（非探针独立实现），确认无回归 + 真实增益。"""
 import json
 import sys
-import os
 
 sys.path.insert(0, ".")
 from liquid_loop.selfspin import LiquidSelfSpin
 from examples.benchmarks.run_longmemeval import collect_turns, build_ss as lme_build
-from examples.benchmarks.run_locomo import collect_turns as lc_collect, build_ss as lc_build
+from examples.benchmarks.run_locomo import collect_turns as lc_collect
 
 FAST_J = False
 TOP_K = 5

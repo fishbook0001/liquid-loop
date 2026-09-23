@@ -15,7 +15,6 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Optional
 
 LIQUIDITY_HEAT = {"hot": 1.0, "warm": 0.7, "cold": 0.4, "frozen": 0.1}
 
@@ -59,7 +58,7 @@ def _evict(items: list[_BudgetItem], budget: int) -> list[_BudgetItem]:
 class CognitiveBudgetStabilizer:
     """接 WorkspaceState，超预算时冷归档低价值证据"""
 
-    def __init__(self, state, budget: Optional[int] = None):
+    def __init__(self, state, budget: int | None = None):
         self.state = state
         self.budget = budget if budget is not None else int(os.environ.get("LIQUID_EVIDENCE_BUDGET", "0"))
 

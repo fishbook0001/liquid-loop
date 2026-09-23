@@ -119,7 +119,9 @@ def confirm_gate(action: str, risk: str = "high", auto_approve: bool = False) ->
     """
     if risk not in RISK_LEVELS:
         risk = "high"  # 未知风险按最高处置
-    if risk == "high" and not auto_approve:
+    # 保留显式分支（不合并为 `return not (...)`）：确认闸的"先拦后放"语义
+    # 需在源码上一眼可读，机械化简反而降低守卫逻辑的可审计性。
+    if risk == "high" and not auto_approve:  # noqa: SIM103
         return False
     return True
 

@@ -3,7 +3,6 @@
 督办项警示①落地：append-only 长期 horizon 退化 → 主动 lifecycle 冷归档。
 守铁律：零丢失(archived≠删) / 可审计(archived_at) / 保留时序 / 禁向量。
 """
-import pytest
 from datetime import datetime, timezone, timedelta
 
 from liquid_loop.workspace import (

@@ -3,19 +3,17 @@
 基于洞察一：液环记忆召回应是"线索激活→稀疏激活→生成整合"，而非精确ID查找。
 参考D539加州理工想象力编码：想象时40%神经元重新激活，想象=感知的神经再次触发。
 """
-import json
 import math
 import re
 from pathlib import Path
 from datetime import datetime
-from typing import List, Dict, Tuple, Optional
 from collections import Counter
 
 # 汉字连续段（CJK 统一表意文字），用于零依赖中文切分
 _CJK_SEG = re.compile(r"[\u4e00-\u9fff]+")
 
 
-def _cjk_bigrams(text: str) -> List[str]:
+def _cjk_bigrams(text: str) -> list[str]:
     """中文字符 bigram 切分（零依赖；禁向量铁律下的最小可用中文相关度近似）。
 
     为什么需要它（2026-09-03 定因，勿删）：
@@ -42,7 +40,7 @@ def _cjk_bigrams(text: str) -> List[str]:
 
 class GenerativeRecall:
     """生成式记忆检索引擎"""
-    
+
     def __init__(self, memory_store_path: str = None, activation_ratio: float = 0.4,
                  cjk_weight: float = 1.0):
         """
@@ -55,8 +53,8 @@ class GenerativeRecall:
         self.activation_ratio = activation_ratio
         self.cjk_weight = cjk_weight
         self.activation_history = []  # 激活历史，用于赫布关联更新
-    
-    def encode_cue(self, cue: str) -> Dict[str, float]:
+
+    def encode_cue(self, cue: str) -> dict[str, float]:
         """
         线索编码层：将输入线索编码为语义权重向量
         零依赖实现：用简单的关键词匹配和TF-IDF，不引入向量数据库
@@ -73,9 +71,9 @@ class GenerativeRecall:
         # 归一化
         total = sum(weights.values()) if weights else 1.0
         return {k: v / total for k, v in weights.items()}
-    
-    def calculate_activation(self, memory: Dict, cue_weights: Dict[str, float],
-                             cue_grams: Optional[Counter] = None) -> float:
+
+    def calculate_activation(self, memory: dict, cue_weights: dict[str, float],
+                             cue_grams: Counter | None = None) -> float:
         """
         稀疏激活层：计算单个记忆单元的激活分数
         两路打分相加：
@@ -100,10 +98,10 @@ class GenerativeRecall:
                 hit = sum(min(c, mgrams[g]) for g, c in cue_grams.items())
                 score += self.cjk_weight * hit / sum(cue_grams.values())
         return score
-    
-    def sparse_activate(self, memories: List[Dict], cue_weights: Dict[str, float], 
-                        ratio: float = None, cue_grams: Optional[Counter] = None
-                        ) -> List[Tuple[Dict, float]]:
+
+    def sparse_activate(self, memories: list[dict], cue_weights: dict[str, float],
+                        ratio: float = None, cue_grams: Counter | None = None
+                        ) -> list[tuple[dict, float]]:
         """
         稀疏激活：取top ratio比例的记忆激活
         :param ratio: 激活比例，默认用self.activation_ratio（0.4）
@@ -128,8 +126,8 @@ class GenerativeRecall:
                 "activated_ids": activated_ids
             })
         return activated
-    
-    def generate_integration(self, activated: List[Tuple[Dict, float]], 
+
+    def generate_integration(self, activated: list[tuple[dict, float]],
                               cue: str) -> str:
         """
         生成整合层：将激活的记忆内容整合为连贯输出
@@ -137,30 +135,30 @@ class GenerativeRecall:
         """
         if not activated:
             return f"未找到与'{cue}'相关的记忆。"
-        
+
         # 按激活强度排序
         activated.sort(key=lambda x: x[1], reverse=True)
-        
+
         # 生成整合内容
         parts = [f"基于线索'{cue}'，激活了{len(activated)}条相关记忆：\n"]
         for i, (memory, score) in enumerate(activated[:5], 1):
             title = memory.get("title", "未命名")
             content = memory.get("content", "")[:200]
             parts.append(f"{i}. [{title}]（激活强度：{score:.2f}）\n   {content}\n")
-        
+
         if len(activated) > 5:
             parts.append(f"... 还有{len(activated) - 5}条相关记忆未展开。\n")
-        
+
         # 生成关联洞察
         if len(activated) >= 2:
             parts.append("\n【关联洞察】\n")
             parts.append(f"以上{len(activated)}条记忆在'{cue}'线索下共同激活，")
             parts.append("可能存在跨领域关联。建议进一步分析这些记忆之间的赫布关联强度。\n")
-        
+
         return "".join(parts)
-    
-    def recall(self, cue: str, memories: List[Dict], 
-               generate: bool = True) -> Dict:
+
+    def recall(self, cue: str, memories: list[dict],
+               generate: bool = True) -> dict:
         """
         完整的生成式检索流程
         :param cue: 检索线索
@@ -177,7 +175,7 @@ class GenerativeRecall:
         generated = self.generate_integration(activated, cue) if generate else ""
         # 4. 激活映射
         activation_map = {m.get("id", ""): score for m, score in activated if m.get("id")}
-        
+
         return {
             "cue": cue,
             "cue_weights": cue_weights,
@@ -191,8 +189,8 @@ class GenerativeRecall:
 
 
 # 便捷函数
-def generative_recall(cue: str, memories: List[Dict], 
-                      activation_ratio: float = 0.4) -> Dict:
+def generative_recall(cue: str, memories: list[dict],
+                      activation_ratio: float = 0.4) -> dict:
     """便捷函数：执行生成式检索"""
     engine = GenerativeRecall(activation_ratio=activation_ratio)
     return engine.recall(cue, memories)

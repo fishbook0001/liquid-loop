@@ -59,7 +59,7 @@ def test_capability_menu_bad_risk():
     menu = CapabilityMenu()
     try:
         menu.declare("x", risk="critical")
-        assert False, "应拒绝非法 risk"
+        raise AssertionError("应拒绝非法 risk")
     except ValueError:
         pass
 

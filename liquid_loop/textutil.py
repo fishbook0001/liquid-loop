@@ -5,9 +5,7 @@ from pathlib import Path
 import uuid
 import re
 import json
-import hashlib
-import os
-from typing import Optional, List, Dict, Any
+import logging
 
 # ── 生命周期效率编码常量（原 workspace 顶部，随 _derive_lifecycle_thresholds 迁入）──
 LIFECYCLE_ACCURACY_PRIORITY = 0.85        # α：偏向保留准确性（防误归档）
@@ -49,7 +47,7 @@ def _get_version() -> str:
         return data.get("project", {}).get("version", "2.2.0")
     return "2.2.0"
 
-def _tokenize(text: str) -> List[str]:
+def _tokenize(text: str) -> list[str]:
     """关键词分词（零依赖替代 sentence-transformers）
 
     混合策略：英文按单词分，中文逐字分。
@@ -88,7 +86,6 @@ def _keyword_overlap(a: str, b: str, cache: dict | None = None) -> float:
         key = f"{min(h1,h2)}:{max(h1,h2)}"  # str key，JSON 兼容
         if key in cache:
             return cache[key]
-    import re
     tokens1 = set(re.findall(r"[一-鿿]|[a-zA-Z0-9]+", a.lower()))
     tokens2 = set(re.findall(r"[一-鿿]|[a-zA-Z0-9]+", b.lower()))
     if not tokens1 or not tokens2:

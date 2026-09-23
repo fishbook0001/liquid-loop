@@ -9,7 +9,7 @@
 
 只读 state.json（隔离，不写生产）。输出复核队列报告。
 """
-import json, sys, re
+import json, re
 from collections import Counter
 
 DEFAULT_STATE = "/Users/feixubuke/.liquidloop/memory/.liquid/state.json"
@@ -37,7 +37,7 @@ def run(state_path=DEFAULT_STATE, top_n=10):
     d = json.load(open(state_path))
     mems = d["memories"]
     gaps = [m for m in mems if is_verification_gap(m)]
-    print(f"=== v2.1 低稳定性自动召回 · 误差回路缺口扫描 ===")
+    print("=== v2.1 低稳定性自动召回 · 误差回路缺口扫描 ===")
     print(f"总记忆: {len(mems)} | 复核缺口: {len(gaps)} ({len(gaps)/len(mems)*100:.0f}%)")
     # 缺口分组
     by_sig = Counter(re.match(r"\[?(marvis fact batch|distill|distilled)", m["content"]).group(1)

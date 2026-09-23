@@ -5,15 +5,13 @@
 扩展参考D567三大脑区协同决策地图：自我监控+外部评估+决策融合。
 """
 import json
-import math
 from pathlib import Path
 from datetime import datetime
-from typing import List, Dict, Optional, Tuple
 
 
 class DualEngineMonitor:
     """双引擎监控架构"""
-    
+
     def __init__(self, monitor_store_path: str = None):
         """
         初始化双引擎监控
@@ -22,27 +20,27 @@ class DualEngineMonitor:
         self.monitor_store_path = Path(monitor_store_path) if monitor_store_path else None
         self.audit_log = []  # 决策审计日志
         self._load()
-    
+
     def _load(self):
         """从文件加载审计日志"""
         if self.monitor_store_path and self.monitor_store_path.exists():
             try:
-                with open(self.monitor_store_path, "r", encoding="utf-8") as f:
+                with open(self.monitor_store_path, encoding="utf-8") as f:
                     data = json.load(f)
                     self.audit_log = data.get("audit_log", [])
-            except:
+            except Exception:
                 self.audit_log = []
-    
+
     def _save(self):
         """保存审计日志"""
         if self.monitor_store_path:
             self.monitor_store_path.parent.mkdir(parents=True, exist_ok=True)
             with open(self.monitor_store_path, "w", encoding="utf-8") as f:
                 json.dump({"audit_log": self.audit_log}, f, ensure_ascii=False, indent=2)
-    
+
     # ========== 引擎一：自我状态监控（Internal Engine，对应45a区）==========
-    
-    def monitor_internal_health(self, 
+
+    def monitor_internal_health(self,
                                  memory_total: int,
                                  recall_success_rate: float,
                                  association_density: float,
@@ -52,7 +50,7 @@ class DualEngineMonitor:
                                  cpu_usage: float,
                                  memory_usage: float,
                                  disk_usage: float,
-                                 service_status: str = "ok") -> Dict:
+                                 service_status: str = "ok") -> dict:
         """
         引擎一：自我状态监控
         监控维度：记忆健康、再生状态、执行质量、资源状态
@@ -64,13 +62,13 @@ class DualEngineMonitor:
             0.2 * min(1.0, association_density / 0.5) +  # 关联密度
             0.2 * regeneration_score  # 再生评分
         )
-        
+
         # 执行质量评分
         execution_quality = (
             0.5 * task_completion_rate +
             0.5 * (1.0 - error_rate)
         )
-        
+
         # 资源状态评分
         resource_health = (
             0.3 * (1.0 - cpu_usage) +
@@ -78,14 +76,14 @@ class DualEngineMonitor:
             0.2 * (1.0 - disk_usage) +
             0.2 * (1.0 if service_status == "ok" else 0.0)
         )
-        
+
         # 综合自我健康评分
         internal_health = (
             0.4 * memory_health +
             0.3 * execution_quality +
             0.3 * resource_health
         )
-        
+
         return {
             "engine": "internal",
             "timestamp": datetime.now().isoformat(),
@@ -106,9 +104,9 @@ class DualEngineMonitor:
                 "service_status": service_status
             }
         }
-    
+
     # ========== 引擎二：外部环境评估（External Engine，对应47/12o区）==========
-    
+
     def monitor_external_quality(self,
                                    input_relevance: float,
                                    information_density: float,
@@ -117,7 +115,7 @@ class DualEngineMonitor:
                                    distribution_shift: float,
                                    user_intent_clarity: float,
                                    urgency: float,
-                                   risk_level: float) -> Dict:
+                                   risk_level: float) -> dict:
         """
         引擎二：外部环境评估
         评估维度：输入质量、领域匹配、分布偏移、用户意图
@@ -129,24 +127,24 @@ class DualEngineMonitor:
             0.2 * (1.0 - noise_level) +
             0.2 * domain_match
         )
-        
+
         # 分布偏移适应性评分（偏移越大，适应性挑战越大）
         adaptability = 1.0 - distribution_shift * 0.5  # 偏移1.0时适应性0.5
-        
+
         # 用户意图评分
         intent_quality = (
             0.4 * user_intent_clarity +
             0.3 * (1.0 - urgency) +  # 越紧急，决策质量要求越高
             0.3 * (1.0 - risk_level)  # 风险越高，越需要谨慎
         )
-        
+
         # 综合外部质量评分
         external_quality = (
             0.4 * input_quality +
             0.3 * adaptability +
             0.3 * intent_quality
         )
-        
+
         return {
             "engine": "external",
             "timestamp": datetime.now().isoformat(),
@@ -165,11 +163,11 @@ class DualEngineMonitor:
                 "risk_level": risk_level
             }
         }
-    
+
     # ========== 决策融合层（对应D567三大脑区协同决策）==========
-    
-    def fuse_decision(self, internal_result: Dict, external_result: Dict,
-                       w_internal: float = 0.5, w_external: float = 0.5) -> Dict:
+
+    def fuse_decision(self, internal_result: dict, external_result: dict,
+                       w_internal: float = 0.5, w_external: float = 0.5) -> dict:
         """
         决策融合层：双引擎评估结果融合为自主决策
         决策模式：
@@ -180,9 +178,9 @@ class DualEngineMonitor:
         """
         internal_health = internal_result.get("internal_health", 0.5)
         external_quality = external_result.get("external_quality", 0.5)
-        
+
         decision_score = w_internal * internal_health + w_external * external_quality
-        
+
         # 决策模式判定
         if internal_health >= 0.7 and external_quality >= 0.7:
             mode = "autonomous_high_confidence"
@@ -200,7 +198,7 @@ class DualEngineMonitor:
             mode = "conservative_with_verification"
             action = "保守执行（带验证环节）"
             need_verification = True
-        
+
         decision = {
             "timestamp": datetime.now().isoformat(),
             "decision_score": round(decision_score, 3),
@@ -211,7 +209,7 @@ class DualEngineMonitor:
             "need_verification": need_verification,
             "weights": {"internal": w_internal, "external": w_external}
         }
-        
+
         # 记录审计日志
         self.audit_log.append({
             "decision": decision,
@@ -221,14 +219,14 @@ class DualEngineMonitor:
         # 只保留最近100条
         self.audit_log = self.audit_log[-100:]
         self._save()
-        
+
         return decision
-    
-    def get_audit_log(self, limit: int = 20) -> List[Dict]:
+
+    def get_audit_log(self, limit: int = 20) -> list[dict]:
         """获取决策审计日志"""
         return self.audit_log[-limit:]
-    
-    def get_monitor_stats(self) -> Dict:
+
+    def get_monitor_stats(self) -> dict:
         """获取监控统计"""
         if not self.audit_log:
             return {"total_decisions": 0}
@@ -245,8 +243,8 @@ class DualEngineMonitor:
 
 
 # 便捷函数
-def dual_engine_monitor_decision(internal_params: Dict, external_params: Dict,
-                                   store_path: str = None) -> Dict:
+def dual_engine_monitor_decision(internal_params: dict, external_params: dict,
+                                   store_path: str = None) -> dict:
     """便捷函数：执行双引擎监控决策"""
     monitor = DualEngineMonitor(monitor_store_path=store_path)
     internal = monitor.monitor_internal_health(**internal_params)

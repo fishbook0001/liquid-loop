@@ -11,7 +11,6 @@
 import sys
 import os
 import time
-import shutil
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -75,7 +74,7 @@ def test_lr_save_load():
     cooled = lr3.activation["A"]
     print(f"  模拟1天前写入→冷却: A={cooled:.3f}（应≈{a1*0.5:.3f}，隔夜仍活）")
     assert 0 < cooled < a1, "TTL 冷却方向错"
-    print(f"  ✓ 引擎级 save/load + TTL 冷却通过")
+    print("  ✓ 引擎级 save/load + TTL 冷却通过")
     return True
 
 
@@ -103,7 +102,7 @@ def test_selfspin_cross_session():
     plain = ss2.recall_local("演化机制的状态如何", top_k=5, liquid=False)
     plain_ids = [r["fact"] for r in plain]
     liquid_ids = [r["fact"] for r in res]
-    print(f"  会话2 query[演化机制的状态如何]")
+    print("  会话2 query[演化机制的状态如何]")
     print(f"    plain : {[f[:12] for f in plain_ids]}")
     print(f"    liquid: {[f[:12] for f in liquid_ids]} (激活: {[r['activation'] for r in res]})")
 

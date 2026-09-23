@@ -1,10 +1,13 @@
+import fcntl
 import json
 import os
 import shutil
 import sys
 import time
-from pathlib import Path
+from contextlib import contextmanager, suppress
 from dataclasses import asdict
+from pathlib import Path
+
 from .workspace import (
     WorkspaceState, Anchor, Evidence, Memory,
     Conflict, StateSnapshot, AnchorRelation, AuditChain, now,
@@ -38,8 +41,6 @@ def get_audit_chain(workspace_root: Path) -> AuditChain:
     """获取审计链实例"""
     return AuditChain(str(_ensure_dir(workspace_root) / AUDIT_FILE))
 
-import fcntl
-from contextlib import contextmanager
 
 @contextmanager
 def _file_lock(filepath: str, mode: str = "w"):
@@ -78,7 +79,7 @@ def _archive_id_set(workspace_root: Path) -> set:
         s: set = set()
         p = _ensure_dir(workspace_root) / ARCHIVE_FILE
         if p.exists():
-            with open(p, "r", encoding="utf-8") as f:
+            with open(p, encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
                     if line:
@@ -98,17 +99,15 @@ def load(workspace_root: Path) -> WorkspaceState:
     # 编码容错：state.json 可能因异常写入产生非 UTF-8 字节，
     # 首次严格解码失败时退回 replace 模式并记录审计，避免整文件不可读。
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             data = json.load(f)
     except UnicodeDecodeError:
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
+        with open(path, encoding="utf-8", errors="replace") as f:
             data = json.load(f)
-        try:
+        with suppress(Exception):
             get_audit_chain(workspace_root).append(
                 "state_load_encoding_recovery",
                 f"unicode_decode_error_recovered_with_replace_at_{path}")
-        except Exception:
-            pass
     state = _from_dict(data)
     # 版本同步：state.json 可能因版本升级而滞后，加载时对齐当前代码版本
     try:
@@ -157,12 +156,10 @@ def _guard_regression(state, workspace_root):
     if disk_total == 0:
         # 全新空工作区（首次写/冷启动）：无可覆盖全量，放行但留痕，
         # 使"在何处新建了库"可观测（标本三原先的无痕落盘通道 → 有审计痕迹）。
-        try:
+        with suppress(Exception):
             get_audit_chain(workspace_root).append(
                 "state_save_fresh_workspace",
                 f"disk_total=0 first_write at {workspace_root}")
-        except Exception:
-            pass
         return
     if disk_total < GUARD_MIN:
         return  # 小工作区(<GUARD_MIN) → 不拦，保护小库误拦
@@ -314,7 +311,9 @@ def locked_state(workspace_root: Path):
     """单一锁层：排他锁跨 load→modify→save 整段，根除并发丢写(P0)。
     跨进程安全（fcntl 建议锁）；server 与批量喂入脚本共用同一把锁。"""
     d = _ensure_dir(workspace_root)
-    lk = open(d / "state.lock", "w")
+    # 锁句柄需跨整个 yield 段持有，由 finally 手动 LOCK_UN+close；
+    # 用 with 会提前解锁 → 失去「load→modify→save 整段原子」语义。
+    lk = open(d / "state.lock", "w")  # noqa: SIM115
     fcntl.flock(lk, fcntl.LOCK_EX)
     try:
         st = load(workspace_root)

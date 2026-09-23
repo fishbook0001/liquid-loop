@@ -110,9 +110,11 @@ def test_half_life_cooling_to_half_after_one_period():
         p = os.path.join(d, "act.json")
         lr.save(p)
         # 模拟经过一个 half_life 的时间
-        data = json.load(open(p))
+        with open(p) as f:
+            data = json.load(f)
         data["ts"] = int(time.time()) - lr.half_life
-        json.dump(data, open(p, "w"))
+        with open(p, "w") as f:
+            json.dump(data, f)
         lr2 = LiquidReweight(persist_path=p)
         lr2.load_anchors(ANCHORS)
         assert lr2.load(p) is True

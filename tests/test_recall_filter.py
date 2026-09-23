@@ -1,5 +1,4 @@
 """液环召回相关性过滤（蒸馏自 RobSelf）落地测试"""
-import math
 from liquid_loop.recall_filter import (
     cosine_dict,
     content_aware_filter,

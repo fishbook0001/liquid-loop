@@ -197,7 +197,7 @@ def main() -> None:
     systems = [
         ("V1 naive vector", lambda: VectorStore(None, False)),
         (f"V2 vector+recency({hl2})", lambda: VectorStore(hl2, False)),
-        (f"V3 +slot过滤(最强)", lambda: VectorStore(hl3, True)),
+        ("V3 +slot过滤(最强)", lambda: VectorStore(hl3, True)),
         ("LL Liquid Loop", LiquidStore),
     ]
 

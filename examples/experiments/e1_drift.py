@@ -18,7 +18,7 @@
 from __future__ import annotations
 import random
 from liquid_loop import WorkspaceState
-from common import make_state, leis, VerdictCollector, seed
+from common import leis, VerdictCollector, seed
 
 
 def run(rounds: int = 300) -> dict:

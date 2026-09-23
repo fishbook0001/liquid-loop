@@ -36,16 +36,25 @@ from liquid_loop.regeneration_metrics import RegenerationMetrics
 from liquid_loop.dual_engine_monitor import DualEngineMonitor, dual_engine_monitor_decision
 
 # 全局引擎实例
+# 2026-09-21 T2 D4/D5 写侧接线：store 根目录改为「环境变量可覆盖、默认值逐字不变」
+# 形式（LIQUID_5I_STORE_DIR）。默认走原生产路径 ~/.liquidloop/memory/.liquid，
+# 生产行为零变化；覆盖能力用于隔离演练/临时实例自测，避免自测污染生产 store。
+STORE_DIR = os.path.expanduser(os.environ.get("LIQUID_5I_STORE_DIR", "~/.liquidloop/memory/.liquid"))
 generative_recall_engine = GenerativeRecall(activation_ratio=0.4)
 hebbian_engine = HebbianAssociation(
-    association_store_path=os.path.expanduser("~/.liquidloop/memory/.liquid/hebbian_associations.json")
+    association_store_path=os.path.join(STORE_DIR, "hebbian_associations.json")
 )
 regeneration_engine = RegenerationMetrics(
-    metrics_store_path=os.path.expanduser("~/.liquidloop/memory/.liquid/regeneration_metrics.json")
+    metrics_store_path=os.path.join(STORE_DIR, "regeneration_metrics.json")
 )
 monitor_engine = DualEngineMonitor(
-    monitor_store_path=os.path.expanduser("~/.liquidloop/memory/.liquid/dual_engine_audit.json")
+    monitor_store_path=os.path.join(STORE_DIR, "dual_engine_audit.json")
 )
+
+# 2026-09-21 T2 D4/D5 写侧接线：把写侧喂送器落到 8791 进程内。
+# 原状：只有 HTTP 端点、无生产调用方 → hebbian/regeneration store 长期空转；
+# 现由本进程后台线程周期性从液环主状态（只读）派生激活信号并喂入 D4/D5 store。
+from liquid_loop import insight_write_side
 
 
 class InsightsAPIHandler(BaseHTTPRequestHandler):
@@ -68,7 +77,7 @@ class InsightsAPIHandler(BaseHTTPRequestHandler):
         body = self.rfile.read(content_length)
         try:
             return json.loads(body.decode("utf-8"))
-        except:
+        except (json.JSONDecodeError, UnicodeDecodeError):
             return {}
     
     def do_GET(self):
@@ -110,6 +119,9 @@ class InsightsAPIHandler(BaseHTTPRequestHandler):
             self._send_json(monitor_engine.get_monitor_stats())
         elif self.path == "/api/v1/monitor/audit":
             self._send_json({"audit_log": monitor_engine.get_audit_log(limit=20)})
+        elif self.path == "/api/v1/feeder/status":
+            # T2 D4/D5 写侧：喂送器运行态（只读观测）
+            self._send_json(insight_write_side.feeder_status())
         else:
             self._send_json({"error": "not_found", "path": self.path}, status=404)
     
@@ -175,7 +187,12 @@ class InsightsAPIHandler(BaseHTTPRequestHandler):
                 return
             result = dual_engine_monitor_decision(internal_params, external_params)
             self._send_json(result)
-        
+
+        elif self.path == "/api/v1/feeder/run":
+            # T2 D4/D5 写侧：手工触发一轮喂送（默认 D5 按周期判定，force_d5 可强制）
+            result = insight_write_side.feeder_run_once(force_d5=bool(body.get("force_d5", False)))
+            self._send_json(result)
+
         else:
             self._send_json({"error": "not_found", "path": self.path}, status=404)
     
@@ -201,6 +218,14 @@ def main():
     print(f"液环5大洞察API服务启动: http://{args.host}:{args.port}")
     print(f"健康检查: http://{args.host}:{args.port}/health")
     print(f"5大洞察列表: http://{args.host}:{args.port}/api/v1/insights")
+
+    # T2 D4/D5 写侧接线：装载并启动进程内喂送线程（默认启用；LIQUID_5I_FEEDER_ENABLED=0 关闭）
+    insight_write_side.init_feeder(hebbian_engine=hebbian_engine,
+                                   regeneration_engine=regeneration_engine,
+                                   autostart=True)
+    _fs = insight_write_side.feeder_status()
+    print(f"D4/D5 写侧喂送: enabled={_fs.get('enabled')} thread_alive={_fs.get('thread_alive')} "
+          f"interval={_fs.get('interval_sec')}s store={_fs.get('store_dir')}")
     print("按 Ctrl+C 停止服务")
     
     try:

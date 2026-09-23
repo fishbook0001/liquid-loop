@@ -211,7 +211,7 @@ def main():
     alias_en = E5.AliasTable(path=ALIAS_EN)
     subset = os.environ.get("LOCOMO_SUBSET") == "1"
     convs = data[:1] if subset else data
-    print(f"━━━ LoCoMo benchmark · 液环存活度 ━━━")
+    print("━━━ LoCoMo benchmark · 液环存活度 ━━━")
     print(f"conversations={len(convs)}  top_k={TOP_K}  fast_jaccard={FAST_J}")
     print(f"E5 英文别名表: {ALIAS_EN} ({'开' if not subset else '开'})\n")
 
@@ -266,13 +266,13 @@ def main():
           f"{'-':>12}{'-':>8}")
     print(f"{'tfidf_s4(+噪声)':<22}{agg['tfidf_s4'][0]/tot:>10.3f}{agg['tfidf_s4'][0]:>8}"
           f"{agg['tfidf_s4'][2]:>12}{'-':>8}")
-    print(f"\n注：成核数极低属预期（单遍真实流无重复）→ 印证 critique 边界；")
-    print(f"主战场=液态召回。liquid(默认) = 机制层零向量 IDF 余弦 + 实体/数字 booster"
-          f"（纯词频标量 + 精确命中 bonus，非 embedding）。")
-    print(f"liquid(默认) > tfidf 即证明：召回缺口本质是词频归一化差异 + 稀有词稀释，"
-          f"零向量可**超越**词频向量基线，非需要语义向量。E5 为临时小样本。")
-    print(f"tfidf 为**零依赖词频向量基线**（纯标准库，零 HF）：与液环同口径对照；")
-    print(f"若 tfidf_s4 的 noise_topk > 0 即验证 critique「向量检索单条噪声入池」弱点。")
+    print("\n注：成核数极低属预期（单遍真实流无重复）→ 印证 critique 边界；")
+    print("主战场=液态召回。liquid(默认) = 机制层零向量 IDF 余弦 + 实体/数字 booster"
+          "（纯词频标量 + 精确命中 bonus，非 embedding）。")
+    print("liquid(默认) > tfidf 即证明：召回缺口本质是词频归一化差异 + 稀有词稀释，"
+          "零向量可**超越**词频向量基线，非需要语义向量。E5 为临时小样本。")
+    print("tfidf 为**零依赖词频向量基线**（纯标准库，零 HF）：与液环同口径对照；")
+    print("若 tfidf_s4 的 noise_topk > 0 即验证 critique「向量检索单条噪声入池」弱点。")
 
 
 if __name__ == "__main__":

@@ -215,9 +215,9 @@ def main():
         items = data[:int(sub_env)]
     else:
         items = data
-    print(f"━━━ LongMemEval benchmark · 液环存活度 ━━━")
+    print("━━━ LongMemEval benchmark · 液环存活度 ━━━")
     print(f"questions={len(items)} (of {len(data)})  top_k={TOP_K}  fast_jaccard={FAST_J}")
-    print(f"E5 英文别名表: 开\n")
+    print("E5 英文别名表: 开\n")
 
     # 机制默认列 = liquid（零向量 IDF 余弦 + 实体/数字 booster，超越词频基线）。
     # liquid_cosine = 纯 tfidf 余弦（lexical_boost=False，追平基线）对照。
@@ -269,12 +269,12 @@ def main():
           f"{'-':>12}{'-':>8}")
     print(f"{'tfidf_s4(+噪声)':<22}{agg['tfidf_s4'][0]/tot:>10.3f}{agg['tfidf_s4'][0]:>8}"
           f"{agg['tfidf_s4'][2]:>12}{'-':>8}")
-    print(f"\n注：成核数极低属预期（单遍会话流无重复）→ 印证 critique 边界；主战场=液态召回。")
-    print(f"liquid(默认) = 机制层零向量 IDF 余弦 + 实体/数字 booster（纯词频标量 + 精确命中 bonus，非 embedding）。")
-    print(f"liquid(默认) > tfidf 即证明：召回缺口本质是词频归一化差异 + 稀有词稀释，"
-          f"零向量可**超越**词频向量基线，非需要语义向量。")
-    print(f"liquid_jaccard 为 v1 纯字符 jaccard 历史对照口径（非默认）。")
-    print(f"tfidf 为**零依赖词频向量基线**（纯标准库，零 HF）：若 tfidf_s4 noise_topk>0 即证向量单条噪声入池弱点。")
+    print("\n注：成核数极低属预期（单遍会话流无重复）→ 印证 critique 边界；主战场=液态召回。")
+    print("liquid(默认) = 机制层零向量 IDF 余弦 + 实体/数字 booster（纯词频标量 + 精确命中 bonus，非 embedding）。")
+    print("liquid(默认) > tfidf 即证明：召回缺口本质是词频归一化差异 + 稀有词稀释，"
+          "零向量可**超越**词频向量基线，非需要语义向量。")
+    print("liquid_jaccard 为 v1 纯字符 jaccard 历史对照口径（非默认）。")
+    print("tfidf 为**零依赖词频向量基线**（纯标准库，零 HF）：若 tfidf_s4 noise_topk>0 即证向量单条噪声入池弱点。")
 
 
 if __name__ == "__main__":

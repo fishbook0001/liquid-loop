@@ -27,7 +27,7 @@ def ft(s):
     for p in ["/System/Library/Fonts/PingFang.ttc", "/System/Library/Fonts/STHeiti Medium.ttc"]:
         if os.path.exists(p):
             try: return ImageFont.truetype(p, s)
-            except: pass
+            except OSError: pass
     return ImageFont.load_default()
 
 def eo(t): return 1-(1-t)**3
@@ -176,8 +176,8 @@ def s_open_source(fi, tot, p):
                 d.rectangle([ss_x-4, ss_y-4, ss_x+target_w+4, ss_y+target_h+4], outline=glow_color, width=3)
 
             img.paste(ss, (ss_x, ss_y))
-        except Exception as e:
-            _center(d, 800, f"[截图加载失败]", ft(40), CORAL)
+        except Exception:
+            _center(d, 800, "[截图加载失败]", ft(40), CORAL)
 
     # 底部文字：60% 出现
     if p > 0.6:
@@ -314,9 +314,9 @@ def encode(final_audio, audio_dur):
     size_mb = int(info['format']['size'])/1024/1024
     print(f"  {out} | {dur:.1f}s | {size_mb:.1f}MB")
     if dur < audio_dur:
-        print(f"  WARNING: truncation!")
+        print("  WARNING: truncation!")
     else:
-        print(f"  OK: no truncation")
+        print("  OK: no truncation")
     return out
 
 if __name__ == "__main__":

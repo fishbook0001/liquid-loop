@@ -13,7 +13,7 @@ liquid 默认 = tfidf 逐字节同公式 → 零外部资源下数学相等。�
 单遍预计算每 fact 的 (cos, cont, ent)，各策略组合排序，避免重复 _idf_cosine。
 复用 run_longmemeval 的 collect_turns/build_ss/TfidfBaseline 保证评测口径一致。
 """
-import sys, os, json, re, math
+import sys, os, json, re
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))

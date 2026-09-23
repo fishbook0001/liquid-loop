@@ -25,7 +25,7 @@ import math
 import argparse
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from liquid_loop.liquid_reweight import LiquidReweight, _containment, _keyword_overlap
+from liquid_loop.liquid_reweight import LiquidReweight, _containment
 
 REPORT_DIR = os.path.expanduser("~/WorkBuddy/Claw/output/军师调研")
 K = 5

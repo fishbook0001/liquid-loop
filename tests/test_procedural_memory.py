@@ -4,12 +4,10 @@
 所有用例用 tmp_path 隔离，避免 sidecar 跨运行污染。
 """
 import json
-from pathlib import Path
 
 import pytest
 
 from liquid_loop.procedural_memory import (
-    ProceduralMemory,
     ProceduralRegistry,
     procmem_admit,
     procmem_recall,
@@ -110,7 +108,8 @@ def test_persistence_sidecar_written(tmp_path):
     reg._save()
     sidecar = tmp_path / ".liquid" / "procedural.json"
     assert sidecar.exists()
-    data = json.load(open(sidecar))
+    with open(sidecar) as f:
+        data = json.load(f)
     assert "persist1" in data["skills"]
 
 

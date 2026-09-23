@@ -34,7 +34,6 @@ import sys
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, REPO_ROOT)
 
-from collections import defaultdict
 import hashlib
 
 from liquid_loop.selfspin import LiquidSelfSpin

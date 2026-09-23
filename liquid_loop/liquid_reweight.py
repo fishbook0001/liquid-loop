@@ -38,7 +38,6 @@
   python3 liquid_reweight.py selftest            # 纯逻辑单测（不写 8790）
   python3 liquid_reweight.py selftest --live     # 真实写 8790（隔离 ns）
 """
-import sys
 import os
 import re
 import json
@@ -47,7 +46,6 @@ import hashlib
 import argparse
 import urllib.request
 import urllib.error
-from collections import defaultdict
 
 DEFAULT_BACKEND = os.environ.get("LL_BASE", "http://127.0.0.1:8790")
 
@@ -84,7 +82,7 @@ def _anchor_id_of(a: dict) -> str:
     """
     if a.get("id"):
         return str(a["id"])
-    h = hashlib.sha1(f"{a.get('name', '')}|{a.get('description', '')}".encode("utf-8")).hexdigest()[:12]
+    h = hashlib.sha1(f"{a.get('name', '')}|{a.get('description', '')}".encode()).hexdigest()[:12]
     return f"h:{h}"
 
 
@@ -407,7 +405,7 @@ def _selftest(live: bool = False):
     assert "A" in liquid_ids, "自测失败：液态召回未唤醒已激活的 A"
     # A 经激活排在 B 之前（记忆流动：激活态主导召回）
     assert liquid_ids[0] == "A", "自测失败：A 未因激活排首位"
-    print(f"  ✓ 液态唤醒断言通过（A 经激活入榜且排首，记忆非死存储）")
+    print("  ✓ 液态唤醒断言通过（A 经激活入榜且排首，记忆非死存储）")
 
     # ── v1.3 因果演化循环成核：因果边独立于 keyword 拓扑唤醒远端记忆 ──
     D = {"id": "D", "name": "量子白骨观", "description": "与液环无字面重叠的远端主题，仅靠因果边连接"}
@@ -422,7 +420,7 @@ def _selftest(live: bool = False):
     cr_ids = [r["anchor_id"] for r in cr]
     print(f"  因果查询[{q2}] 召回: {cr_ids}（D 应入榜）")
     assert "D" in cr_ids, "自测失败：因果边未把远端 D 拉入召回"
-    print(f"  ✓ 因果演化循环成核断言通过（因果边唤醒+召回远端记忆）")
+    print("  ✓ 因果演化循环成核断言通过（因果边唤醒+召回远端记忆）")
 
     # ── v1.4 原理优先成核（MSM 反哺）：原理匹配(why)即便字面零重叠也召回 ──
     # E 表面内容与液环无关，但 principle 声明「一致性判定守禁向量」，
@@ -439,7 +437,7 @@ def _selftest(live: bool = False):
     assert e_row is not None, "自测失败：原理匹配未召回 E"
     assert e_row["literal"] == 0.0, "自测失败：E 竟有字面重叠（应为纯原理通道）"
     assert e_row["principle"] > 0, "自测失败：E 的 principle 通道未计分"
-    print(f"  ✓ 原理优先成核断言通过（why 通道唤醒字面零重叠的 E）")
+    print("  ✓ 原理优先成核断言通过（why 通道唤醒字面零重叠的 E）")
 
     # τ(x) 自适应方向校验
     t_hi = lr.tau_x(0.9)   # 高重叠 → 小 τ（快）
@@ -447,11 +445,11 @@ def _selftest(live: bool = False):
     print(f"\n  τ(x) 自适应: overlap=0.9→τ={t_hi}  overlap=0.1→τ={t_lo}（应 t_hi<t_lo）")
     assert t_hi < t_lo, "自测失败：τ(x) 方向反了"
     assert TAU_MIN <= t_hi <= TAU_MAX and TAU_MIN <= t_lo <= TAU_MAX, "自测失败：τ 越窄带"
-    print(f"  ✓ τ(x) 黏滞窄带断言通过")
+    print("  ✓ τ(x) 黏滞窄带断言通过")
 
     # 写回实证
     if live:
-        print(f"\n  → 真实写 8790（隔离 ns exp:liquid-reweight:selftest）...")
+        print("\n  → 真实写 8790（隔离 ns exp:liquid-reweight:selftest）...")
         rid = f"selftest:{int(time.time())}"
         res = lr.snapshot_to_8790(run_id=rid)
         print(f"    返回: {json.dumps(res, ensure_ascii=False)}")
@@ -460,7 +458,7 @@ def _selftest(live: bool = False):
     else:
         snap = lr.snapshot()
         print(f"\n  → dry-run 快照: {json.dumps(snap, ensure_ascii=False)[:220]}...")
-        print(f"  ✓ 逻辑自测通过（--live 可真实写 8790 验证）")
+        print("  ✓ 逻辑自测通过（--live 可真实写 8790 验证）")
     return True
 
 

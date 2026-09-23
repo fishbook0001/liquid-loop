@@ -2,7 +2,6 @@
 
 验证 v0.9.2 引入的修复在 save/load 往返后不丢失状态，且不破坏向后兼容。
 """
-import pytest
 from pathlib import Path
 
 from liquid_loop.workspace import WorkspaceState

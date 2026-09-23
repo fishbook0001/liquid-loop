@@ -1,7 +1,6 @@
 """m60 建议2 落地测试：guard.overgeneralization_flags 反绝对化词表。"""
 import os
 import sys
-import tempfile
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "liquid_loop"))

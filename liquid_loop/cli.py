@@ -3,8 +3,7 @@ from pathlib import Path
 from collections import Counter
 from .workspace import (
     WorkspaceState, Anchor, Evidence, Memory, StateSnapshot,
-    AnchorRelation, now, DensityLevel, CognitiveStage, LiquidityLevel,
-    SelfRefineEngine, meta_thinker_evaluate, meta_thinker_advice,
+    AnchorRelation, now, SelfRefineEngine, meta_thinker_evaluate, meta_thinker_advice,
     CPERegularizer,
 )
 from .storage import load, save, get_audit_chain
@@ -248,14 +247,14 @@ def check():
     click.echo(f"{icon} 综合熵值: {ent:.4f} [{level}]")
 
     # 显示各维度贡献
-    click.echo(f"  ── 基础五维 ──")
+    click.echo("  ── 基础五维 ──")
     click.echo(f"    锚点漂移:     {det['anchor_drift']:.4f}")
     click.echo(f"    冲突密度:     {det['conflict_density']:.4f}")
     click.echo(f"    证据碎片化:   {det['evidence_fragmentation']:.4f}")
     click.echo(f"    活动间隔:     {det['activity_gap']:.4f}")
     click.echo(f"    价值衰减:     {det['value_decay']:.4f}")
     click.echo(f"    锚定强度:     {det['strength']:.4f}")
-    click.echo(f"  ── CPE 三维 ──")
+    click.echo("  ── CPE 三维 ──")
     click.echo(f"    回顾性衰退:   {det['cpe_retrospective_decay']:.4f}  {'⚠' if det['cpe_retrospective_decay'] > 0.3 else '✓'}")
     click.echo(f"    策略漂移:     {det['cpe_behavioral_drift']:.4f}  {'⚠' if det['cpe_behavioral_drift'] > 0.3 else '✓'}")
     click.echo(f"    泛化崩塌:     {det['cpe_generalization_erosion']:.4f}  {'⚠' if det['cpe_generalization_erosion'] > 0.3 else '✓'}")
@@ -307,12 +306,14 @@ def audit():
 @click.option("--tail", "-n", default=None, type=int, help="仅显示最后 N 行日志")
 def audit_log(tail):
     """查看审计日志"""
-    ac = get_audit_chain(WORKSPACE)
+    # 保留调用本身：get_audit_chain → _ensure_dir 有「建 .liquid 目录」副作用，
+    # 缺失会导致下面的 path.exists() 判定与真实落盘路径不一致（故不收返回值）。
+    get_audit_chain(WORKSPACE)
     path = WORKSPACE / ".liquid" / "audit.log"
     if not path.exists():
         click.echo("审计日志为空。")
         return
-    with open(path, "r") as f:
+    with open(path) as f:
         lines = f.readlines()
     if tail:
         lines = lines[-tail:]
@@ -368,19 +369,19 @@ def self_refine(evidence):
         click.echo(f"⚠ {result['message']}")
         return
 
-    click.echo(f"━━━ 后向自进化报告 ━━━")
+    click.echo("━━━ 后向自进化报告 ━━━")
     click.echo(f"  探测总数: {result['total']}")
     click.echo(f"  通过: {result['passed']}")
     click.echo(f"  失败: {result['failed']}")
     click.echo(f"  通过率: {result['pass_rate']:.0%}")
 
     if result.get("repairs"):
-        click.echo(f"\n━━━ 修复操作 ━━━")
+        click.echo("\n━━━ 修复操作 ━━━")
         for r in result["repairs"]:
             click.echo(f"  {r}")
 
     if result.get("failed_details"):
-        click.echo(f"\n━━━ 失败明细（前5条）━━━")
+        click.echo("\n━━━ 失败明细（前5条）━━━")
         for d in result["failed_details"]:
             click.echo(f"  Q: {d['q']}")
             click.echo(f"  → {d['reason']}")
@@ -421,7 +422,7 @@ def strategy_advice(anchor_name, new_evidence):
         click.echo(f"锚点 '{anchor_name}' 不存在。")
         return
     result = meta_thinker_advice(anchor, s, new_evidence)
-    click.echo(f"━━━ 策略建议 ━━━")
+    click.echo("━━━ 策略建议 ━━━")
     click.echo(f"  锚点: {anchor_name}")
     click.echo(f"  新证据: {new_evidence[:60]}...")
     click.echo(f"  建议: [{result['action']}]")
@@ -445,7 +446,7 @@ def cpe_check(anchor_name, new_evidence, force):
     result = regularizer.regularize(anchor_name, new_evidence, force=force)
     action = result["action"]
     icon = "✓" if action == "PASS" else ("!" if action == "FLAG" else "✗")
-    click.echo(f"━━━ CPE 正则化检查 ━━━")
+    click.echo("━━━ CPE 正则化检查 ━━━")
     click.echo(f"  锚点: {anchor_name}")
     click.echo(f"  新证据: {new_evidence[:60]}...")
     click.echo(f"  判定: [{icon} {action}]  风险评分: {result.get('score', 0):.3f}")
@@ -454,7 +455,7 @@ def cpe_check(anchor_name, new_evidence, force):
             click.echo(f"  原因: {r}")
     if result.get("details"):
         d = result["details"]
-        click.echo(f"\n  详情:")
+        click.echo("\n  详情:")
         click.echo(f"    与现有证据最大重叠: {d.get('max_overlap', 0):.3f}")
         click.echo(f"    与锚点方向偏离: {d.get('drift_score', 0):.3f}")
         click.echo(f"    保护权重(证据越多越敏感): {d.get('protection_weight', 0):.3f}")
@@ -468,7 +469,7 @@ def cpe_scan():
     regularizer = CPERegularizer(s)
     warnings = regularizer.scan_erosion()
 
-    click.echo(f"━━━ CPE 能力侵蚀扫描 ━━━")
+    click.echo("━━━ CPE 能力侵蚀扫描 ━━━")
     if not warnings:
         click.echo("  无能力侵蚀信号 ✓")
     else:
@@ -489,7 +490,7 @@ def cpe_scan():
 def cpe_status():
     """CPE 状态概览：显示当前能力保留状态"""
     s = _load()
-    click.echo(f"━━━ CPE 正则化状态 ━━━")
+    click.echo("━━━ CPE 正则化状态 ━━━")
     click.echo(f"  正则化累计干预: {s.cpe_regularization_count} 次")
     click.echo(f"  已通过检查的证据: {len(s.regularized_evidences)}")
     click.echo(f"  被拦截/标记的证据: {len(s.blocked_evidences)}")
@@ -499,21 +500,21 @@ def cpe_status():
             icon = "⚠" if w["severity"] == "medium" else "🔴"
             click.echo(f"    {icon} [{w['type']}] {w['anchor']}: {w['detail']}")
     else:
-        click.echo(f"  活跃侵蚀告警: 无")
+        click.echo("  活跃侵蚀告警: 无")
 
     # 九维熵值详情
     from .entropy import calculate_detail
     det = calculate_detail(s)
-    click.echo(f"\n━━━ 九维熵值详情 ━━━")
+    click.echo("\n━━━ 九维熵值详情 ━━━")
     click.echo(f"  综合熵: {det['combined']:.4f}")
-    click.echo(f"  ── 基础五维 ──")
+    click.echo("  ── 基础五维 ──")
     click.echo(f"    锚点漂移:           {det['anchor_drift']:.4f}")
     click.echo(f"    冲突密度:           {det['conflict_density']:.4f}")
     click.echo(f"    证据碎片化:         {det['evidence_fragmentation']:.4f}")
     click.echo(f"    活动间隔:           {det['activity_gap']:.4f}")
     click.echo(f"    价值衰减:           {det['value_decay']:.4f}")
     click.echo(f"    锚定强度:           {det['strength']:.4f}")
-    click.echo(f"  ── CPE 三维 ──")
+    click.echo("  ── CPE 三维 ──")
     click.echo(f"    回顾性衰退(CPE):    {det['cpe_retrospective_decay']:.4f}")
     click.echo(f"    策略漂移(CPE):      {det['cpe_behavioral_drift']:.4f}")
     click.echo(f"    泛化崩塌(CPE):      {det['cpe_generalization_erosion']:.4f}")

@@ -7,8 +7,7 @@
 映射到液环 v1.6：contradiction 证据被反复召回(recall_hits)超频→局部降温其降稳贡献
 （防单一印痕超频重放碎片化整体稳定性），守零丢失(阻尼地板 0.3)、不破坏反证轨常态 s/(s+2c+1)。
 """
-import pytest
-from liquid_loop.workspace import WorkspaceState, Anchor, Evidence, Memory
+from liquid_loop.workspace import WorkspaceState, Anchor
 from liquid_loop import storage
 
 

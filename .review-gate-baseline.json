@@ -1,0 +1,9 @@
+{
+  "note": "存量问题基线（棘轮）；新引入的问题才会失败。可用 --update-baseline 重建。",
+  "entries": [
+    "liquid_loop/audit.py::RG-S3",
+    "liquid_loop/rar.py::RG-S3",
+    "liquid_loop/storage.py::RG-S3",
+    "liquid_loop/workspace_ops_1.py::RG-S2"
+  ]
+}

@@ -27,8 +27,8 @@ def ws():
     cons = s.add_memory("vera 与 trae 共同结论", [ev_vera.id, ev_trae.id])
     cons.scope = "consensus"
     cons.contributors = ["vera", "trae"]
-    return s, dict(a=a, ev_vera=ev_vera, ev_trae=ev_trae,
-                   priv=priv, cons=cons)
+    return s, {"a": a, "ev_vera": ev_vera, "ev_trae": ev_trae,
+               "priv": priv, "cons": cons}
 
 
 # ── 1. 读隔离 list_for ──────────────────────────────────────────────

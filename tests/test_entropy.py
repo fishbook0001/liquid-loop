@@ -1,11 +1,8 @@
-import pytest
-from liquid_loop.workspace import WorkspaceState, Anchor, Evidence
+from liquid_loop.workspace import WorkspaceState
 from liquid_loop.entropy import (
     calculate, calculate_detail,
     anchor_drift, conflict_density, evidence_fragmentation,
-    activity_gap, value_decay_entropy, strength_entropy,
-    retrospective_decay_entropy, behavioral_drift_entropy,
-    generalization_erosion_entropy
+    activity_gap
 )
 
 def test_calculate_returns_float():

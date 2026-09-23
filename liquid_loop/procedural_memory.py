@@ -27,7 +27,6 @@ import os
 import re
 from dataclasses import dataclass, field, fields
 from pathlib import Path
-from typing import Optional
 
 from .context_compress import structured_note
 from .workspace import now
@@ -125,7 +124,7 @@ class ProceduralRegistry:
     def _load(self) -> None:
         try:
             if self.path.exists():
-                with open(self.path, "r", encoding="utf-8") as f:
+                with open(self.path, encoding="utf-8") as f:
                     data = json.load(f)
                 _fields = {f.name for f in fields(ProceduralMemory)}
                 self._items = {
@@ -158,7 +157,9 @@ class ProceduralRegistry:
         """
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            lk = open(self.path.with_suffix(".lock"), "w")
+            # 锁句柄跨整段 load→fn→save 持有，由下方 finally 手动 LOCK_UN+close；
+            # 不能用 with（with 会在块尾提前释放锁，失去原子语义）。
+            lk = open(self.path.with_suffix(".lock"), "w")  # noqa: SIM115
             try:
                 fcntl.flock(lk, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
@@ -206,7 +207,7 @@ class ProceduralRegistry:
         return (success_rate, f"成功率 {success_rate:.2f} " + ("≥阈值" if ok else "<阈值"))
 
     def admit(self, skill_id: str, task_tags: list, invocation: str,
-              evidence: str = "", contract: Optional[dict] = None,
+              evidence: str = "", contract: dict | None = None,
               irreversible: bool = False) -> dict:
         """准入一条程序性记忆，跑 EvoC2F 三关 + 分阶段部署。
 
@@ -355,7 +356,7 @@ def procmem_recall(workspace_root: Path, task_query: str, top_k: int = 3) -> lis
 
 
 def procmem_admit(workspace_root: Path, skill_id: str, task_tags: list,
-                  invocation: str, evidence: str = "", contract: Optional[dict] = None,
+                  invocation: str, evidence: str = "", contract: dict | None = None,
                   irreversible: bool = False) -> dict:
     return ProceduralRegistry(workspace_root).admit(
         skill_id, task_tags, invocation, evidence, contract, irreversible)

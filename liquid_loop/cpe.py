@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from .textutil import (
-    now, uid, _derive_lifecycle_thresholds, _get_version,
-    _tokenize, _keyword_overlap, _judge_answer,
-    _dissolve_votes_path, _load_dissolve_votes, _save_dissolve_votes,
+    _tokenize, _keyword_overlap,
 )
-from .entropy import calculate
+from typing import TYPE_CHECKING, Any
+if TYPE_CHECKING:
+    # 仅注解使用 → 放 TYPE_CHECKING：破与 workspace 的运行期循环依赖，且 PEP 563 下不求值。
+    # （2026-09-24：原先 Anchor/WorkspaceState/List/Dict/Any 从未导入，
+    #   注解不可解析 → 门禁 RG-B2 latent 命中 6 处 / mypy name-defined 12 处）
+    from .workspace import Anchor, WorkspaceState
 import os
 import sys
 
@@ -112,9 +115,10 @@ class CPERegularizer:
         3. 两者取最大值
         """
         # 信号1：category匹配（最强信号）
-        if category and anchor.name:
-            if category.lower() == anchor.name.lower() or category.lower() in anchor.name.lower():
-                return 0.8
+        if (category and anchor.name
+                and (category.lower() == anchor.name.lower()
+                     or category.lower() in anchor.name.lower())):
+            return 0.8
 
         # 信号2：从锚点下现有证据提取核心关键词，计算重叠
         direction_keywords = set()
@@ -145,7 +149,7 @@ class CPERegularizer:
             return 0.5
         return _keyword_overlap(new_content, direction_text)
 
-    def evaluate_new_evidence(self, anchor: Anchor, new_content: str, category: str = "") -> Dict[str, Any]:
+    def evaluate_new_evidence(self, anchor: Anchor, new_content: str, category: str = "") -> dict[str, Any]:
         """评估新证据对既有锚点体系的能力侵蚀风险（CPE §3 Regularized Self-Evolution Objective）
 
         返回:
@@ -292,7 +296,7 @@ class CPERegularizer:
             }
         }
 
-    def scan_erosion(self) -> List[Dict[str, Any]]:
+    def scan_erosion(self) -> list[dict[str, Any]]:
         """扫描全工作区，检测能力侵蚀信号（CPE §2.2 Capability Erosion）
 
         对标 CPE 三大表现：
@@ -359,7 +363,7 @@ class CPERegularizer:
         self.state.cpe_erosion_warnings = warnings
         return warnings
 
-    def coalesce(self, anchor_name: str, threshold: float = 0.7) -> Dict[str, Any]:
+    def coalesce(self, anchor_name: str, threshold: float = 0.7) -> dict[str, Any]:
         """模糊去重合并：同锚点下相似度 > threshold 的证据自动合并
 
         合并策略：
@@ -410,7 +414,7 @@ class CPERegularizer:
             "remaining": len(evs) - len(to_remove),
         }
 
-    def regularize(self, anchor_name: str, content: str, force: bool = False) -> Dict[str, Any]:
+    def regularize(self, anchor_name: str, content: str, force: bool = False) -> dict[str, Any]:
         """对单条证据执行 CPE 正则化检查（对外接口）
 
         force=True 时跳过 BLOCK，仅做 FLAG 标记

@@ -38,7 +38,6 @@ vera/trae/parlant/qiucai 记忆；且服务端 PREPING 闸门仅对 warmup:* 生
 
   # 作为库：见底部 LiquidSelfSpin 类
 """
-import sys
 import os
 import re
 import json
@@ -49,7 +48,6 @@ import logging
 import argparse
 import urllib.request
 import urllib.error
-from collections import defaultdict
 
 DEFAULT_BACKEND = os.environ.get("LL_BASE", "http://127.0.0.1:8790")
 
@@ -78,8 +76,8 @@ def _idf_jaccard(a: str, b: str, idf: dict) -> float:
     此处 IDF 模式按英文语料正确做法小写）。用于评测验证（recall_local(idf=True)），
     默认不启用，不影响既有基准。
     """
-    ta = set(t.lower() for t in _tokens(a))
-    tb = set(t.lower() for t in _tokens(b))
+    ta = {t.lower() for t in _tokens(a)}
+    tb = {t.lower() for t in _tokens(b)}
     if not ta or not tb:
         return 0.0
     inter = ta & tb
@@ -152,17 +150,18 @@ def _entity_boost(q: str, f: str) -> float:
 
 # 核心词抽取：去中文虚词 / 极泛连接词，保留领域实体与结论词，
 # 用于跨篇「同主题不同表述」的聚合信号（结构化精确匹配，守禁向量）。
-_STOP = set("的 是 在 存在 普遍 常 问题 风险 一种 我们 本文 该 其 与 和 或 对 为 有 被 "
-            "进行 使用 基于 采用 表明 指出 认为 提出 实现 用于 以及 即 也 都 等 这种 这个 "
-            "一个 没有 不 未 各 类 中 上 下 从 到 把 让 使 当 如果 但 而 则 并 且 将 已 仍 "
-            "更 最 较 很 之 间 内 外 后 前 时 处 它 他 她 我 你 这 那 哪 谁 什么 如何 怎么 "
-            "为何 是否 由于 因此 所以 因为 虽然 但是 然而 此外 同时 另外 例如 比如 包括 "
-            "涉及 针对 关于 对于 根据 按照".split())
+_STOP_WORDS = ("的 是 在 存在 普遍 常 问题 风险 一种 我们 本文 该 其 与 和 或 对 为 有 被 "
+               "进行 使用 基于 采用 表明 指出 认为 提出 实现 用于 以及 即 也 都 等 这种 这个 "
+               "一个 没有 不 未 各 类 中 上 下 从 到 把 让 使 当 如果 但 而 则 并 且 将 已 仍 "
+               "更 最 较 很 之 间 内 外 后 前 时 处 它 他 她 我 你 这 那 哪 谁 什么 如何 怎么 "
+               "为何 是否 由于 因此 所以 因为 虽然 但是 然而 此外 同时 另外 例如 比如 包括 "
+               "涉及 针对 关于 对于 根据 按照")
+_STOP = set(_STOP_WORDS.split())
 
 
 def _core(s: str) -> set:
     """去虚词后的核心词集（中文单字 + 英文数字连续串）。"""
-    return set(t for t in _tokens(s) if t not in _STOP)
+    return {t for t in _tokens(s) if t not in _STOP}
 
 
 # CJK / 全角标点 → ASCII 归一（用于沉积内容规范化，保证同义不同标点的事实成 byte 一致 → 触发成核）
@@ -262,7 +261,7 @@ class LiquidSelfSpin:
         df: dict = {}
         for fs in self._facts.values():
             for f in fs:
-                for t in set(t.lower() for t in _tokens(f)):
+                for t in {t.lower() for t in _tokens(f)}:
                     df[t] = df.get(t, 0) + 1
         self._idf = {t: math.log((n + 1) / (c + 1)) + 1.0 for t, c in df.items()}
         return self._idf
@@ -318,7 +317,7 @@ class LiquidSelfSpin:
         items = [(rid, f) for rid, fs in self._facts.items() for f in fs]
         clusters = []  # 每簇: {"members":[(rid,f)], "reports":set}
         for rid, f in items:
-            best, best_score, best_ci = None, 0.0, 0
+            best, best_score = None, 0.0
             cf = _core(f)
             for c in clusters:
                 # 与簇内代表（前 3 个成员）比较，取最高相似度
@@ -330,7 +329,7 @@ class LiquidSelfSpin:
                     merge = (j >= self.fast_jaccard and shared >= 4) or (ci >= 2 and j >= 0.38)
                     score = j if j >= self.fast_jaccard else (0.4 + min(ci, 5) * 0.05 if merge else 0.0)
                     if merge and score > best_score:
-                        best_score, best, best_ci = score, c, ci
+                        best_score, best = score, c
                 if best_score >= self.fast_jaccard:
                     break
             if best is not None and best_score >= 0.45:
@@ -359,8 +358,7 @@ class LiquidSelfSpin:
                  "rejected": 0, "fail": 0}
         for c in self._nuclei:
             stats["nuclei"] += 1
-            canonical = c["canonical"]
-            for rid in sorted(c["reports"]):
+            for _rid in sorted(c["reports"]):
                 stats["deposited"] += 1
                 if dry_run:
                     stats["written"] += 1
@@ -423,9 +421,11 @@ class LiquidSelfSpin:
         """
         idf_tab = self._build_idf() if (idf or idf_cosine) else None
         if idf_cosine:
-            sim = lambda a, b: _idf_cosine(a, b, idf_tab)
+            def sim(a: str, b: str) -> float:
+                return _idf_cosine(a, b, idf_tab)
         elif idf:
-            sim = lambda a, b: _idf_jaccard(a, b, idf_tab)
+            def sim(a: str, b: str) -> float:
+                return _idf_jaccard(a, b, idf_tab)
         else:
             sim = _jaccard
         if lexical_boost:
@@ -474,7 +474,7 @@ class LiquidSelfSpin:
         """朴素直写：每篇抽出的事实各写一次，content 不规范化 → 同 content 命中 <2 → 难成核。"""
         b = backend.rstrip("/")
         stats = {"deposited": 0, "written": 0, "nucleated": 0, "rejected": 0, "fail": 0}
-        for rid, facts in facts_by_report.items():
+        for _rid, facts in facts_by_report.items():
             for f in facts:
                 stats["deposited"] += 1
                 if dry_run:
@@ -508,7 +508,7 @@ class LiquidSelfSpin:
 
     def print_summary(self):
         s = self.summary()
-        print(f"━━━ 双层自转 · 本地旋转摘要 ━━━")
+        print("━━━ 双层自转 · 本地旋转摘要 ━━━")
         print(f"  run_id           : {s['run_id']}")
         print(f"  agent_id(隔离)   : {s['agent_id']}")
         print(f"  摄入报告数       : {s['reports_ingested']}")
@@ -560,7 +560,7 @@ def _selftest(live: bool = False):
     else:
         st = ss.deposit(dry_run=True)
         print(f"\n  → dry-run 沉积模拟: {json.dumps(st, ensure_ascii=False)}")
-        print(f"  ✓ 逻辑自测通过（--live 可真实入库验证成核加速）")
+        print("  ✓ 逻辑自测通过（--live 可真实入库验证成核加速）")
     return True
 
 

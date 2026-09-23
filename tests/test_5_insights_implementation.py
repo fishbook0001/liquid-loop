@@ -4,16 +4,15 @@
 """
 import sys
 import os
-import json
 import tempfile
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from liquid_loop.generative_recall import GenerativeRecall, generative_recall
-from liquid_loop.hebbian_association import HebbianAssociation, update_hebbian_associations
-from liquid_loop.regeneration_metrics import RegenerationMetrics, check_regeneration_health
-from liquid_loop.dual_engine_monitor import DualEngineMonitor, dual_engine_monitor_decision
+from liquid_loop.hebbian_association import HebbianAssociation
+from liquid_loop.regeneration_metrics import RegenerationMetrics
+from liquid_loop.dual_engine_monitor import DualEngineMonitor
 
 
 # ========== 测试数据 ==========
@@ -30,7 +29,7 @@ TEST_MEMORIES = [
 # ========== 1. 生成式记忆检索测试 ==========
 
 class TestGenerativeRecall:
-    
+
     def test_encode_cue_basic(self):
         """测试线索编码基本功能"""
         engine = GenerativeRecall()
@@ -39,13 +38,13 @@ class TestGenerativeRecall:
         assert len(weights) > 0
         # 权重和应为1（归一化）
         assert abs(sum(weights.values()) - 1.0) < 0.01
-    
+
     def test_encode_cue_empty(self):
         """测试空线索编码"""
         engine = GenerativeRecall()
         weights = engine.encode_cue("")
         assert isinstance(weights, dict)
-    
+
     def test_calculate_activation(self):
         """测试激活分数计算"""
         engine = GenerativeRecall()
@@ -53,7 +52,7 @@ class TestGenerativeRecall:
         memory = {"id": "test", "title": "记忆检索测试", "content": "这是一个关于记忆检索的测试内容", "tags": "测试"}
         score = engine.calculate_activation(memory, cue_weights)
         assert score > 0  # 匹配的记忆应有正激活分数
-    
+
     def test_sparse_activate_ratio(self):
         """测试稀疏激活比例"""
         engine = GenerativeRecall(activation_ratio=0.4)
@@ -64,14 +63,14 @@ class TestGenerativeRecall:
         # 激活分数应降序排列
         scores = [s for _, s in activated]
         assert scores == sorted(scores, reverse=True)
-    
+
     def test_sparse_activate_min_one(self):
         """测试稀疏激活至少激活1条"""
         engine = GenerativeRecall(activation_ratio=0.01)  # 极小比例
         cue_weights = engine.encode_cue("测试")
         activated = engine.sparse_activate(TEST_MEMORIES, cue_weights)
         assert len(activated) >= 1
-    
+
     def test_generate_integration(self):
         """测试生成整合内容"""
         engine = GenerativeRecall()
@@ -80,7 +79,7 @@ class TestGenerativeRecall:
         assert isinstance(result, str)
         assert len(result) > 0
         assert "测试线索" in result
-    
+
     def test_recall_full_pipeline(self):
         """测试完整检索流程"""
         result = generative_recall("赫布法则 记忆", TEST_MEMORIES)
@@ -90,7 +89,7 @@ class TestGenerativeRecall:
         assert "activation_map" in result
         assert result["activation_ratio"] == 0.4
         assert len(result["activated_memories"]) > 0
-    
+
     def test_recall_no_match(self):
         """测试无匹配记忆的检索"""
         result = generative_recall("完全不相关的关键词xyz123", TEST_MEMORIES)
@@ -101,7 +100,7 @@ class TestGenerativeRecall:
 # ========== 2. 赫布关联引擎测试 ==========
 
 class TestHebbianAssociation:
-    
+
     def test_calculate_strength(self):
         """测试关联强度计算"""
         engine = HebbianAssociation()
@@ -115,7 +114,7 @@ class TestHebbianAssociation:
         assert 0.8 < s20 < 0.9
         # 强度应随共激活次数单调递增
         assert s20 > s10
-    
+
     def test_update_association(self):
         """测试关联更新"""
         engine = HebbianAssociation()
@@ -124,7 +123,7 @@ class TestHebbianAssociation:
         assert assoc["association_strength"] > 0
         assert assoc["memory_a"] == "A"
         assert assoc["memory_b"] == "B"
-    
+
     def test_update_association_symmetry(self):
         """测试关联对称性（A-B和B-A应是同一个关联）"""
         engine = HebbianAssociation()
@@ -135,7 +134,7 @@ class TestHebbianAssociation:
         # 共激活次数应为2
         assoc = list(engine.associations.values())[0]
         assert assoc["co_activation_count"] == 2
-    
+
     def test_update_from_activation(self):
         """测试从激活事件批量更新关联"""
         engine = HebbianAssociation()
@@ -143,7 +142,7 @@ class TestHebbianAssociation:
         # 3个元素→3对关联
         assert count == 3
         assert len(engine.associations) == 3
-    
+
     def test_get_associations(self):
         """测试获取某个记忆的关联"""
         engine = HebbianAssociation()
@@ -154,7 +153,7 @@ class TestHebbianAssociation:
         # 按强度降序
         strengths = [a["strength"] for a in assocs]
         assert strengths == sorted(strengths, reverse=True)
-    
+
     def test_shortcut_curing(self):
         """测试快捷通路固化"""
         engine = HebbianAssociation(shortcut_threshold=0.5)
@@ -163,7 +162,7 @@ class TestHebbianAssociation:
             engine.update_association("A", "B")
         shortcuts = engine.get_shortcuts()
         assert len(shortcuts) >= 1
-    
+
     def test_decay_weak_associations(self):
         """测试衰减弱关联"""
         engine = HebbianAssociation()
@@ -173,7 +172,7 @@ class TestHebbianAssociation:
             assoc["last_activated"] = "2026-08-01T00:00:00"
         removed = engine.decay_weak_associations(days_threshold=30, min_strength=0.1)
         assert removed >= 1
-    
+
     def test_get_stats(self):
         """测试获取统计信息"""
         engine = HebbianAssociation()
@@ -182,7 +181,7 @@ class TestHebbianAssociation:
         assert stats["total_associations"] == 3
         assert "average_strength" in stats
         assert "shortcut_count" in stats
-    
+
     def test_persistence(self):
         """测试关联数据持久化"""
         with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
@@ -201,7 +200,7 @@ class TestHebbianAssociation:
 # ========== 3. 记忆再生抗衰指标测试 ==========
 
 class TestRegenerationMetrics:
-    
+
     def test_calculate_diversity(self):
         """测试激活多样性计算"""
         engine = RegenerationMetrics()
@@ -214,13 +213,13 @@ class TestRegenerationMetrics:
         assert d_uniform > d_concentrated
         assert 0 <= d_uniform <= 1
         assert 0 <= d_concentrated <= 1
-    
+
     def test_calculate_diversity_empty(self):
         """测试空激活计数的多样性"""
         engine = RegenerationMetrics()
         d = engine.calculate_diversity({})
         assert d == 0.0
-    
+
     def test_collect_metrics_healthy(self):
         """测试healthy状态采集"""
         engine = RegenerationMetrics()
@@ -233,7 +232,7 @@ class TestRegenerationMetrics:
         )
         assert metrics["anti_aging_status"] == "healthy"
         assert metrics["regeneration_score"] >= 0.7
-    
+
     def test_collect_metrics_critical(self):
         """测试critical状态采集"""
         engine = RegenerationMetrics()
@@ -246,14 +245,14 @@ class TestRegenerationMetrics:
         )
         assert metrics["anti_aging_status"] == "critical"
         assert metrics["regeneration_score"] < 0.4
-    
+
     def test_should_trigger_regeneration(self):
         """测试再生触发判断"""
         engine = RegenerationMetrics()
         # critical状态应触发
         engine.collect_metrics(0, 0, 0, {"A": 1}, 10)
-        assert engine.should_trigger_regeneration() == True
-    
+        assert engine.should_trigger_regeneration()
+
     def test_get_regeneration_recommendation(self):
         """测试再生建议"""
         engine = RegenerationMetrics()
@@ -261,7 +260,7 @@ class TestRegenerationMetrics:
         rec = engine.get_regeneration_recommendation()
         assert rec["action"] == "maintain"
         assert "suggested_learning_rounds" in rec
-    
+
     def test_get_trend(self):
         """测试趋势分析"""
         engine = RegenerationMetrics()
@@ -273,7 +272,7 @@ class TestRegenerationMetrics:
 # ========== 4. 双引擎监控架构测试 ==========
 
 class TestDualEngineMonitor:
-    
+
     def test_monitor_internal_health(self):
         """测试自我状态监控"""
         monitor = DualEngineMonitor()
@@ -288,7 +287,7 @@ class TestDualEngineMonitor:
         assert "execution_quality" in result
         assert "resource_health" in result
         assert 0 <= result["internal_health"] <= 1
-    
+
     def test_monitor_external_quality(self):
         """测试外部环境评估"""
         monitor = DualEngineMonitor()
@@ -303,7 +302,7 @@ class TestDualEngineMonitor:
         assert "adaptability" in result
         assert "intent_quality" in result
         assert 0 <= result["external_quality"] <= 1
-    
+
     def test_fuse_decision_high_confidence(self):
         """测试高置信自主决策"""
         monitor = DualEngineMonitor()
@@ -311,8 +310,8 @@ class TestDualEngineMonitor:
         external = {"external_quality": 0.85}
         decision = monitor.fuse_decision(internal, external)
         assert decision["mode"] == "autonomous_high_confidence"
-        assert decision["need_verification"] == False
-    
+        assert not decision["need_verification"]
+
     def test_fuse_decision_self_repair(self):
         """测试自我修复优先决策"""
         monitor = DualEngineMonitor()
@@ -320,8 +319,8 @@ class TestDualEngineMonitor:
         external = {"external_quality": 0.8}
         decision = monitor.fuse_decision(internal, external)
         assert decision["mode"] == "self_repair_priority"
-        assert decision["need_verification"] == True
-    
+        assert decision["need_verification"]
+
     def test_fuse_decision_request_clarification(self):
         """测试请求用户澄清决策"""
         monitor = DualEngineMonitor()
@@ -329,7 +328,7 @@ class TestDualEngineMonitor:
         external = {"external_quality": 0.3}  # 低于0.5
         decision = monitor.fuse_decision(internal, external)
         assert decision["mode"] == "request_clarification"
-    
+
     def test_fuse_decision_conservative(self):
         """测试保守执行决策"""
         monitor = DualEngineMonitor()
@@ -337,8 +336,8 @@ class TestDualEngineMonitor:
         external = {"external_quality": 0.6}
         decision = monitor.fuse_decision(internal, external)
         assert decision["mode"] == "conservative_with_verification"
-        assert decision["need_verification"] == True
-    
+        assert decision["need_verification"]
+
     def test_audit_log(self):
         """测试决策审计日志"""
         monitor = DualEngineMonitor()
@@ -348,7 +347,7 @@ class TestDualEngineMonitor:
         log = monitor.get_audit_log()
         assert len(log) >= 1
         assert "decision" in log[0]
-    
+
     def test_get_monitor_stats(self):
         """测试监控统计"""
         monitor = DualEngineMonitor()

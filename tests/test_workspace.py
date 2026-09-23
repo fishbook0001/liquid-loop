@@ -1,5 +1,4 @@
-import pytest
-from liquid_loop.workspace import WorkspaceState, Anchor, Evidence, Memory, Conflict
+from liquid_loop.workspace import WorkspaceState
 
 def test_add_anchor():
     state = WorkspaceState()

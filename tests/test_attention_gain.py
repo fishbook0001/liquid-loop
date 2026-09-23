@@ -6,8 +6,7 @@
 映射到液环 v1.5：被反复召回的证据黏滞升稳（gaze 增益↔τ(x) 黏滞吸收），在
 _update_memory_stability 中作为 support 加成（只增 s 不削 c → 守反证轨 stability 公式）。
 """
-import pytest
-from liquid_loop.workspace import WorkspaceState, Anchor, Evidence, Memory
+from liquid_loop.workspace import WorkspaceState, Anchor, Memory
 from liquid_loop import storage
 
 

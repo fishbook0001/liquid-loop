@@ -4,7 +4,6 @@
 空、中文检索失效；2026-08-08 已对齐 selfspin 的字符级分词（中文单字 + 英数串 +
 中文虚词停用过滤），中文召回现可生效（见 test_recall_chinese_content）。
 """
-import pytest
 
 from liquid_loop.rar import RARIndex
 
@@ -62,15 +61,25 @@ def test_visible_candidates_isolation():
     # 轻量 fake state（duck-typed，仅需 evidences/memories/anchors 属性）
     class Ev:
         def __init__(self, id, agent_id, content, anchor_id=""):
-            self.id = id; self.agent_id = agent_id; self.content = content
-            self.anchor_id = anchor_id; self.timestamp = ""
+            self.id = id
+            self.agent_id = agent_id
+            self.content = content
+            self.anchor_id = anchor_id
+            self.timestamp = ""
+
     class Mem:
         def __init__(self, id, content, scope, contributors):
-            self.id = id; self.content = content; self.scope = scope
-            self.contributors = contributors; self.formed_at = ""
+            self.id = id
+            self.content = content
+            self.scope = scope
+            self.contributors = contributors
+            self.formed_at = ""
+
     class State:
         def __init__(self, evs, mems):
-            self.evidences = evs; self.memories = mems; self.anchors = []
+            self.evidences = evs
+            self.memories = mems
+            self.anchors = []
 
     st = State(
         evs=[Ev("e1", "vera", "liquid loop forbids vectors"),

@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 dsh_reversible.py — Cordis 可逆副作用（Disposable Pattern）零依赖原语
 ==============================================================================
@@ -23,7 +22,7 @@ Cordis 的核心机制（Koishi/Shigma 元框架，DeepSeek vendored + 北大联
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, List
+from collections.abc import Callable
 
 
 @dataclass
@@ -52,9 +51,9 @@ class ReversibleRegistry:
 
     def __init__(self, name: str = "root") -> None:
         self.name = name
-        self._effects: List[_Effect] = []
-        self._children: List["ReversibleRegistry"] = []
-        self._dependents: List["ReversibleRegistry"] = []  # 依赖我的注册表
+        self._effects: list[_Effect] = []
+        self._children: list[ReversibleRegistry] = []
+        self._dependents: list[ReversibleRegistry] = []  # 依赖我的注册表
         self._disposed = False
 
     # ---- 登记与派生 ----
@@ -64,14 +63,14 @@ class ReversibleRegistry:
         self._ensure_alive()
         self._effects.append(_Effect(label=label, undo=undo))
 
-    def child(self, name: str) -> "ReversibleRegistry":
+    def child(self, name: str) -> ReversibleRegistry:
         """派生子作用域。父 dispose 前先 dispose 全部子作用域（子先于父）。"""
         self._ensure_alive()
         c = ReversibleRegistry(name=f"{self.name}/{name}")
         self._children.append(c)
         return c
 
-    def require(self, provider: "ReversibleRegistry") -> None:
+    def require(self, provider: ReversibleRegistry) -> None:
         """
         生命周期包含：本注册表依赖 provider。
         provider 被 dispose 前，会先 dispose 所有声明依赖它的注册表（consumer）。
@@ -104,7 +103,7 @@ class ReversibleRegistry:
 
     # ---- 上下文管理（with 语句自动回滚） ----
 
-    def __enter__(self) -> "ReversibleRegistry":
+    def __enter__(self) -> ReversibleRegistry:
         return self
 
     def __exit__(self, *exc) -> None:
@@ -129,7 +128,7 @@ class ReversibleRegistry:
 # 自测（运行时验证）
 # ---------------------------------------------------------------------------
 def _selftest() -> None:
-    log: List[str] = []
+    log: list[str] = []
 
     # 1. 基本可逆：注册逆序回滚
     r = ReversibleRegistry("base")

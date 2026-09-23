@@ -3,7 +3,6 @@
 覆盖：local_rotate 同义改写合并成核、词汇不重叠同义盲区（宁漏不污染）、
 recall_local 命中、deposit dry_run 统计、去吞错后可观测持久化失败计数。
 """
-import pytest
 
 from liquid_loop.selfspin import LiquidSelfSpin
 

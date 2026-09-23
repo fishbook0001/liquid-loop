@@ -4,9 +4,7 @@ import os
 import hashlib
 
 from .textutil import (
-    now, uid, _derive_lifecycle_thresholds, _get_version,
-    _tokenize, _keyword_overlap, _judge_answer,
-    _dissolve_votes_path, _load_dissolve_votes, _save_dissolve_votes,
+    now,
 )
 
 class AuditChain:
@@ -19,7 +17,7 @@ class AuditChain:
 
     def _load(self):
         if os.path.exists(self._path):
-            with open(self._path, "r") as f:
+            with open(self._path) as f:
                 for line in f:
                     line = line.strip()
                     if line:

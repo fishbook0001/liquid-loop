@@ -17,8 +17,7 @@
     - user_dissatisfaction: content中包含不满关键词
     - workflow_drift: 蒸馏决策无推荐项等流程漂移
 """
-import time
-from typing import List, Dict, Any, Optional
+from typing import Any
 from datetime import datetime
 
 
@@ -77,14 +76,14 @@ class InstantAwarenessEngine:
         self.state.instant_awareness_stats = stats
 
     @staticmethod
-    def _recompute_rate(stats: Dict[str, Any]) -> None:
+    def _recompute_rate(stats: dict[str, Any]) -> None:
         """以 ops_checked 为分母重算觉醒率（ops_checked 缺失时保持原值，向后兼容）。"""
         checked = int(stats.get("ops_checked", 0))
         if checked > 0:
             stats["awareness_rate"] = round(int(stats.get("detected", 0)) / checked, 4)
 
     def _record_event(self, event_type: str, severity: str,
-                      details: Dict[str, Any], detected: bool = True) -> None:
+                      details: dict[str, Any], detected: bool = True) -> None:
         """记录越界事件到 state.instant_events。"""
         event = {
             "timestamp": datetime.now().isoformat(),
@@ -110,7 +109,7 @@ class InstantAwarenessEngine:
         self._recompute_rate(stats)
         self.state.instant_awareness_stats = stats
 
-    def check_remember(self, content: str, agent_id: str = "") -> List[Dict[str, Any]]:
+    def check_remember(self, content: str, agent_id: str = "") -> list[dict[str, Any]]:
         """remember操作后检测：重复remember、用户不满。"""
         self._mark_checked()  # 无论是否越界都计入分母（真觉醒率）
         detected_events = []
@@ -152,7 +151,7 @@ class InstantAwarenessEngine:
 
         return detected_events
 
-    def check_recall(self, query: str, results: List[Dict], agent_id: str = "") -> List[Dict[str, Any]]:
+    def check_recall(self, query: str, results: list[dict], agent_id: str = "") -> list[dict[str, Any]]:
         """recall操作后检测：召回失败尖峰。"""
         self._mark_checked()  # 无论是否越界都计入分母（真觉醒率）
         detected_events = []
@@ -179,7 +178,7 @@ class InstantAwarenessEngine:
         return detected_events
 
     def check_governance(self, action: str, target_id: str,
-                         authorized: bool, agent_id: str = "") -> List[Dict[str, Any]]:
+                         authorized: bool, agent_id: str = "") -> list[dict[str, Any]]:
         """governance操作后检测：未授权写操作。"""
         self._mark_checked()  # 无论是否越界都计入分母（真觉醒率）
         detected_events = []
@@ -202,7 +201,7 @@ class InstantAwarenessEngine:
 
         return detected_events
 
-    def check_state_error(self, error_type: str, details: Dict[str, Any]) -> None:
+    def check_state_error(self, error_type: str, details: dict[str, Any]) -> None:
         """state异常检测：加载/保存失败。"""
         severity = "critical" if error_type in ("state_corruption", "save_failure") else "high"
         self._record_event(
@@ -211,7 +210,7 @@ class InstantAwarenessEngine:
             details=details,
         )
 
-    def check_workflow_drift(self, drift_type: str, details: Dict[str, Any]) -> None:
+    def check_workflow_drift(self, drift_type: str, details: dict[str, Any]) -> None:
         """工作流漂移检测：蒸馏决策无推荐项等。"""
         self._record_event(
             event_type="workflow_drift",
@@ -224,15 +223,15 @@ class InstantAwarenessEngine:
         stats = getattr(self.state, 'instant_awareness_stats', {})
         return stats.get("awareness_rate", 0.0)
 
-    def get_recent_events(self, event_type: Optional[str] = None,
-                          limit: int = 10) -> List[Dict[str, Any]]:
+    def get_recent_events(self, event_type: str | None = None,
+                          limit: int = 10) -> list[dict[str, Any]]:
         """获取最近的越界事件。"""
         events = getattr(self.state, 'instant_events', [])
         if event_type:
             events = [e for e in events if e.get("event_type") == event_type]
         return events[-limit:]
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """获取觉醒统计。"""
         stats = getattr(self.state, 'instant_awareness_stats', {
             "total_events": 0, "detected": 0, "awareness_rate": 0.0

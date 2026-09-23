@@ -11,13 +11,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from liquid_loop import WorkspaceState, load, save
-from liquid_loop.storage import StateRegressionGuardError, GUARD_MIN, GUARD_RATIO
+# 必须先 insert 源码路径再 import（否则会导入已安装副本）→ E402 为有意为之
+from liquid_loop import WorkspaceState, load, save  # noqa: E402
+from liquid_loop.storage import StateRegressionGuardError, GUARD_MIN, GUARD_RATIO  # noqa: E402
 
 
 def _seed(state, n):
     for i in range(n):
-        a = state.add_anchor(f"a{i}", f"anchor {i}")
+        state.add_anchor(f"a{i}", f"anchor {i}")  # 副作用是断言前提，赋值无用
         state.add_evidence(f"a{i}", f"evidence content {i}", agent_id="agent_test")
 
 

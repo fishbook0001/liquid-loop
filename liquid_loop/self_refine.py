@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 from .textutil import (
-    now, uid, _derive_lifecycle_thresholds, _get_version,
     _tokenize, _keyword_overlap, _judge_answer,
-    _dissolve_votes_path, _load_dissolve_votes, _save_dissolve_votes,
 )
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
+    # 仅注解使用 → 放 TYPE_CHECKING：破与 workspace 的运行期循环依赖，且 PEP 563 下不求值。
+    # （2026-09-24：原先 List/Dict/Any 从未导入，注解不可解析 → 门禁 RG-B2 latent 命中）
     from .workspace import WorkspaceState, Anchor
 
 class SelfRefineEngine:
@@ -15,7 +15,7 @@ class SelfRefineEngine:
     def __init__(self, state: WorkspaceState):
         self.state = state
 
-    def generate_probes(self, evidence_ids: List[str] = None) -> List[Dict[str, Any]]:
+    def generate_probes(self, evidence_ids: list[str] = None) -> list[dict[str, Any]]:
         """从证据中生成差异化的探测QA对。
 
         MemMA融合：每个证据生成唯一的问题（通过截取前半段做问，后半段做答），
@@ -71,7 +71,7 @@ class SelfRefineEngine:
                 })
         return probes
 
-    def verify(self, probe: Dict[str, Any]) -> Dict[str, Any]:
+    def verify(self, probe: dict[str, Any]) -> dict[str, Any]:
         """验证单条探测：用关键词检索模拟回忆。"""
         question = probe.get("question", "")
         gold = probe.get("answer", "")
@@ -111,7 +111,7 @@ class SelfRefineEngine:
             "reason": "通过" if verified else f"关键词不匹配(conf={confidence})，gold={gold[:40]}",
         }
 
-    def repair(self, failures: List[Dict[str, Any]]) -> List[str]:
+    def repair(self, failures: list[dict[str, Any]]) -> list[str]:
         from .workspace import Anchor, Evidence  # 局部延迟 import：破与 workspace 的循环依赖
         """对失败的探测执行修复操作：新增Evidence。
 
@@ -170,7 +170,7 @@ class SelfRefineEngine:
         return repairs
 
     # ── SEAL 落地（arXiv:2605.24426 失败诊断双优化）──
-    def diagnose(self, failure: Dict[str, Any]) -> Dict[str, Any]:
+    def diagnose(self, failure: dict[str, Any]) -> dict[str, Any]:
         """SEAL 诊断：失败探测归因到锚点，判定失败类型。
 
         fail_type:
@@ -204,7 +204,7 @@ class SelfRefineEngine:
         return {"fail_type": fail_type, "target_anchor": target.id if target else None,
                 "root_cause": root, "tune": tune}
 
-    def apply_strategy(self, diag: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def apply_strategy(self, diag: dict[str, Any]) -> list[dict[str, Any]]:
         """SEAL 双优化 - 策略侧：修复确认→boost_stability；噪声→downweight。"""
         if not diag.get("target_anchor"):
             return []
@@ -219,7 +219,7 @@ class SelfRefineEngine:
         projected = round(min(1.0, max(0.1, base + a.seal_adjust)), 3)
         return [{"op": diag["tune"], "anchor": a.name, "seal_adjust": a.seal_adjust, "projected_stability": projected}]
 
-    def run(self, evidence_ids: List[str] = None) -> Dict[str, Any]:
+    def run(self, evidence_ids: list[str] = None) -> dict[str, Any]:
         """执行完整后向自进化周期。"""
         probes = self.generate_probes(evidence_ids)
         if not probes:
@@ -227,7 +227,8 @@ class SelfRefineEngine:
         results = [self.verify(p) for p in probes]
         passed = sum(1 for r in results if r.get("passed"))
         # 只对 fact 和 relation 类型失败的做修复，overview 失败不修
-        failures = [r for p, r in zip(probes, results)
+        # results 由 probes 逐条 verify 而来 → 长度恒等；strict=True 固化不变量。
+        failures = [r for p, r in zip(probes, results, strict=True)
                     if not r.get("passed") and p.get("type") != "overview"]
         repairs = self.repair(failures)
         # SEAL 双优化 - 策略侧：诊断失败 → 调锚点 stability
@@ -249,7 +250,7 @@ class SelfRefineEngine:
         self.state.self_refine_repair_count += len(repairs) + len(strategy_actions)
         return {"total": len(probes), "passed": passed, "failed": len(failures), "pass_rate": round(passed / len(probes), 2), "repairs": repairs, "diagnoses": diagnoses, "strategy_actions": strategy_actions, "failed_details": [{"q": r.get("question", "")[:60], "reason": r.get("reason", "")} for r in failures[:5]]}
 
-def meta_thinker_evaluate(state: WorkspaceState) -> Dict[str, Any]:
+def meta_thinker_evaluate(state: WorkspaceState) -> dict[str, Any]:
     """评估当前工作区策略健康度。"""
     issues = []
     orphan_anchors = [a for a in state.anchors if not a.evidence_ids]
@@ -264,7 +265,7 @@ def meta_thinker_evaluate(state: WorkspaceState) -> Dict[str, Any]:
         issues.append({"severity": "error", "issue": f"熵值过高({ent:.2f})，认知结构不稳定"})
     return {"healthy": len([i for i in issues if i["severity"] == "error"]) == 0, "issues": issues, "entropy": ent}
 
-def meta_thinker_advice(anchor: Anchor, state: WorkspaceState, new_evidence: str) -> Dict[str, Any]:
+def meta_thinker_advice(anchor: Anchor, state: WorkspaceState, new_evidence: str) -> dict[str, Any]:
     """零LLM策略检查：评估新证据与现有记忆的关系。"""
     existing = [e.content for e in state.evidences if e.anchor_id == anchor.id]
     if not existing:

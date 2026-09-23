@@ -19,7 +19,6 @@
 """
 import re
 import hashlib
-from typing import List, Dict, Optional, Tuple
 from datetime import datetime
 
 
@@ -132,7 +131,7 @@ def _tag_prefix_match(a: str, b: str) -> float:
 
 def compute_match_score(evidence_content: str, memory_content: str,
                         evidence_anchor_id: str = "",
-                        memory_evidence_anchor_ids: Optional[set] = None,
+                        memory_evidence_anchor_ids: set | None = None,
                         evidence_principle: str = "",
                         memory_principle: str = "") -> float:
     """计算evidence与Memory的匹配得分（0~1）。
@@ -157,9 +156,9 @@ def compute_match_score(evidence_content: str, memory_content: str,
 
 def find_best_match(evidence_content: str, memories: list,
                     evidence_anchor_id: str = "",
-                    evidences: Optional[list] = None,
+                    evidences: list | None = None,
                     evidence_principle: str = "",
-                    threshold: float = 0.35) -> Optional[Tuple[object, float]]:
+                    threshold: float = 0.35) -> tuple[object, float] | None:
     """为新evidence寻找最佳匹配的Memory。
 
     返回 (memory, score) 或 None（无匹配达到阈值）。
@@ -238,10 +237,8 @@ def update_memory_with_evidence(memory, evidence, match_score: float = 0.0) -> d
     if _ev_ids and _old_ids and _ev_ids & _old_ids:
         _skip_append = True
     if old_content and ev_content and not _skip_append:
-        old_weight = n / (n + 1)
-        new_weight = 1 / (n + 1)
-        # 简单加权：旧内容保留核心，新内容追加关键片段
-        # 避免简单拼接导致内容膨胀，取新内容前80字作为增量
+        # 加权融合：旧内容完整保留（n条证据结晶，权重高），新内容取前80字增量
+        # （单条新证据权重低）。文本无法做数值加权，以"保留完整vs截取片段"实现权重差异。
         new_snippet = ev_content[:80] + ("..." if len(ev_content) > 80 else "")
         if n == 1:
             # 第一条关联证据：直接用evidence内容作为结晶核心

@@ -1,5 +1,4 @@
 """液环自检（蒸馏自 U-OPSD）落地测试"""
-import math
 from liquid_loop.self_eval import (
     majority_vote,
     diverg_beta,

@@ -1,5 +1,4 @@
 """PEEK 预算稳态 + SEAL 双优化 落地测试（液环仓库内）"""
-import pytest
 from liquid_loop.workspace import WorkspaceState, SelfRefineEngine
 from liquid_loop.cognitive_budget import CognitiveBudgetStabilizer
 
@@ -30,7 +29,7 @@ def test_budget_stabilizer_evicts_low_value(monkeypatch):
 def test_budget_no_limit_when_unset(monkeypatch):
     monkeypatch.delenv("LIQUID_EVIDENCE_BUDGET", raising=False)
     st = WorkspaceState()
-    a = st.add_anchor("x")
+    st.add_anchor("x")  # 副作用（创建锚点）是断言前提，赋值无用
     for i in range(10):
         st.add_evidence("x", f"证据{i}")
     arch = [e for e in st.evidences if e.archived]

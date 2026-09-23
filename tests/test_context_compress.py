@@ -1,5 +1,4 @@
 """液环长会话提取式压缩落地测试（蒸馏自 Octomind condense.rs）"""
-import pytest
 from liquid_loop.context_compress import (
     ExtractiveCondenser,
     compress_context,

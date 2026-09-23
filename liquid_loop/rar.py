@@ -59,7 +59,7 @@ _STOP = set(
     can will just should now i you he she it we they them his her its their my your our me him us as be been being have has had
     do does did having am are is was were this that these those what which who whom whose where why how one two three four five
     six seven eight nine ten also via per due off up down out after before between during without within get got getting make
-    made makes making use used using would could might must shall""".split()
+    made makes making use used using would could might must shall""".split()  # noqa: SIM905
 )
 
 # tokens/entities appearing in more than this many memories are treated as hubs:
@@ -146,7 +146,7 @@ def _category_of(state, anchor_id: str) -> str:
     return a.name if a else ""
 
 
-def _pref_tokens(mid: str, idx: "RARIndex") -> set:
+def _pref_tokens(mid: str, idx: RARIndex) -> set:
     out: set = set()
     for p in idx.pref.get(mid, set()):
         out |= _tokens(p)
@@ -173,7 +173,7 @@ class RARIndex:
 
     # ── build ──────────────────────────────────────────────
     @classmethod
-    def build(cls, cands: list, version: str = "", norm: float = 3.0) -> "RARIndex":
+    def build(cls, cands: list, version: str = "", norm: float = 3.0) -> RARIndex:
         idx = cls()
         idx.version = version
         all_tokens: dict = {}
@@ -268,7 +268,7 @@ class RARIndex:
         # proportional to overlap between query tokens and their pref objects
         pref_score: dict = {}
         if pref_intent:
-            for mid in self.pref.keys():
+            for mid in self.pref:
                 ptoks = _pref_tokens(mid, self)
                 if not ptoks or not q_tokens:
                     continue

@@ -9,7 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "liquid_loop"))
 
-from liquid_loop import load, save, locked_state, WorkspaceState  # noqa: E402
+from liquid_loop import load, locked_state  # noqa: E402
 from liquid_loop.storage import list_undo, restore_undo  # noqa: E402
 
 

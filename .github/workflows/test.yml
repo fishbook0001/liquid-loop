@@ -1,0 +1,49 @@
+name: test
+
+# 代码审查标准与流程 v1.0 · CI 段
+# 触发：push main / PR  →  lint(ruff) + 类型(mypy,非阻断) + 测试(pytest)
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  quality:
+    name: lint + type + test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install (dev extras)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      # ── 阻断项：ruff A 级（E9/F/T20）已 100% 干净 → 真门禁 ─────────
+      #    2026-09-24：原 select 是未执行过的"愿望清单"（实测 663 条）→ 只能 non-blocking
+      #    = 装饰性配置。现 A 级 0 findings，转 blocking；B 级 backlog 见 pyproject 注释。
+      #    范围 = 生产包 + 测试（examples/ douyin-promo/ liquid_loop_exp/ 为外围/实验，
+      #    其 F841/F401 属独立 backlog，另行处理）。──
+      - name: ruff A 级 (blocking)
+        run: ruff check --config pyproject.toml liquid_loop tests --statistics
+
+      # ── 观测项：B 级 backlog（E501/UP/I001/SIM…）非阻断 ──────────────
+      - name: ruff B 级 backlog (non-blocking)
+        continue-on-error: true
+        run: ruff check --config pyproject.toml liquid_loop tests --statistics --diff
+
+      # ── 阻断项：测试 ────────────────────────────────────────────────
+      - name: pytest (blocking)
+        run: pytest -q
+
+      # ── 非阻断：类型检查先观测，存量问题清零后再改 blocking ──────────
+      - name: mypy (non-blocking)
+        continue-on-error: true
+        run: mypy --config-file pyproject.toml liquid_loop

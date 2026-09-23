@@ -138,8 +138,10 @@ def u_opsd_step(rollouts, pseudo_pick, tau: float = 0.5, beta: float = 0.5,
         raise ValueError("u_opsd_step 需要 teacher_dist / student_dist 策略分布函数")
     answers = [r[0] for r in rollouts]
     pseudo, frac = majority_vote(answers)
-    Y_plus = [r for r, a in zip(rollouts, answers) if a == pseudo]
-    Y_minus = [r for r, a in zip(rollouts, answers) if a != pseudo]
+    # answers 由 rollouts 逐条投影而来 → 长度恒等；strict=True 固化该不变量，
+    # 一旦将来重构破坏（如过滤后再 zip）立即抛错而非静默截断。
+    Y_plus = [r for r, a in zip(rollouts, answers, strict=True) if a == pseudo]
+    Y_minus = [r for r, a in zip(rollouts, answers, strict=True) if a != pseudo]
 
     triggered = (frac >= tau) and (len(Y_minus) > 0)
     if not triggered:

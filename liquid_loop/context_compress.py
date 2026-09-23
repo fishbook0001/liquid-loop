@@ -18,7 +18,6 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass, field
-from typing import Optional
 
 
 def estimate_tokens(text: str) -> int:
@@ -138,7 +137,7 @@ class ExtractiveCondenser:
 
 def compress_context(
     texts: list,
-    threshold: Optional[int] = None,
+    threshold: int | None = None,
 ) -> tuple:
     """液环便捷入口：把多条证据/上下文作为一轮压缩。
 
@@ -184,7 +183,7 @@ _BUCKET_EVIDENCE = re.compile(
 
 def structured_note(
     texts: list,
-    threshold: Optional[int] = None,
+    threshold: int | None = None,
 ) -> dict:
     """RE-TRAC 同构：把多条证据/上下文压成结构化三组分笔记。
 

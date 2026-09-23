@@ -1,13 +1,12 @@
 """共识结晶 contributors 随新一致方动态扩展（三方+ CCI 计量）。"""
 from liquid_loop import WorkspaceState
-from liquid_loop.workspace import Anchor, Evidence, Memory
 
 
 def _add(st, name, content, agent_id):
     a = next((x for x in st.anchors if x.name == name), None)
     if a is None:
         a = st.add_anchor(name)
-    e = Evidence(content=content, anchor_id=a.id, agent_id=agent_id)
+    # 直接造 Evidence 但不入状态 = 死代码（Evidence 构造无副作用；真正写入靠下面 add_evidence）
     st.add_evidence(a, content, agent_id=agent_id)
     return a
 
