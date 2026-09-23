@@ -1739,19 +1739,48 @@ class WorkspaceState:
             return result
         return {"ok": False, "error": "not_found", "memory_id": memory_id}
 
-    def _delete_evidence_by_id(self, agent_id: str, memory_id: str) -> Optional[dict]:
+    def _purge_evidence_refs(self, eid: str) -> None:
+        """统一清理所有对象对 eid 的引用（evidence_ids + causal 四边），杜绝悬空。
+
+        排除 eid 自身（其即将被删除，无需清理自身引用）。
+        方案A·F1修复：_delete_evidence_by_id / _delete_by_content / dissolve_as 三处删除路径
+        统一调用，确保 anchor/memory/evidence 的 evidence_ids 与 causal 四边均被清理。
+        """
+        for a in self.anchors:
+            if eid in a.evidence_ids:
+                a.evidence_ids.remove(eid)
+            for _k in ("caused_by", "causes", "enables", "contradicts"):
+                _lst = (a.causal or {}).get(_k)
+                if _lst and eid in _lst:
+                    _lst.remove(eid)
+        for m in self.memories:
+            if eid in m.evidence_ids:
+                m.evidence_ids.remove(eid)
+            for _k in ("caused_by", "causes", "enables", "contradicts"):
+                _lst = (m.causal or {}).get(_k)
+                if _lst and eid in _lst:
+                    _lst.remove(eid)
+        for e in self.evidences:
+            if e.id == eid:
+                continue
+            for _k in ("caused_by", "causes", "enables", "contradicts"):
+                _lst = (e.causal or {}).get(_k)
+                if _lst and eid in _lst:
+                    _lst.remove(eid)
+
+    def _delete_evidence_by_id(self, agent_id: str, evidence_id: str) -> Optional[dict]:
         """按evidence id删除（仅所有者可删）。命中返回结果，未命中返回None。"""
-        ev = next((e for e in self.evidences if e.id == memory_id), None)
+        ev = next((e for e in self.evidences if e.id == evidence_id), None)
         if ev is None:
             return None
         if ev.agent_id != agent_id:
             return {"ok": False, "error": "forbidden: not owner of evidence",
-                    "memory_id": memory_id}
-        for a in self.anchors:
-            if ev.anchor_id == a.id and memory_id in a.evidence_ids:
-                a.evidence_ids.remove(memory_id)
+                    "memory_id": evidence_id}
+        # 级联清理（方案A·F1统一）：全量移除对该 evidence 的所有引用——
+        # anchor/memory/evidence 的 evidence_ids 与 causal 四边，杜绝悬空。
+        self._purge_evidence_refs(evidence_id)
         self.evidences.remove(ev)
-        return {"ok": True, "deleted": "evidence", "memory_id": memory_id}
+        return {"ok": True, "deleted": "evidence", "memory_id": evidence_id}
 
     def _delete_memory_by_id(self, agent_id: str, memory_id: str) -> Optional[dict]:
         """按memory id删除（private仅贡献者可删，consensus禁止单端删除）。"""
@@ -1787,9 +1816,7 @@ class WorkspaceState:
             self.memories.remove(m)
         to_del = [e for e in self.evidences if e.id in ev_ids]
         for e in to_del:
-            for a in self.anchors:
-                if e.id in a.evidence_ids:
-                    a.evidence_ids.remove(e.id)
+            self._purge_evidence_refs(e.id)
             self.evidences.remove(e)
         return {"ok": True, "deleted": "memory+evidence(owned only)", "memory_id": memory_id,
                 "memories": len(owned), "evidences": len(to_del)}
@@ -1824,9 +1851,7 @@ class WorkspaceState:
             self.memories.remove(mem)
             to_del = [e for e in self.evidences if e.id in ev_ids]
             for e in to_del:
-                for a in self.anchors:
-                    if e.id in a.evidence_ids:
-                        a.evidence_ids.remove(e.id)
+                self._purge_evidence_refs(e.id)
                 self.evidences.remove(e)
             votes.pop(memory_id, None)
             _save_dissolve_votes(votes_root, votes)
