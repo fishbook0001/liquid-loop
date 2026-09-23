@@ -35,7 +35,10 @@ from .cognitive_budget import CognitiveBudgetStabilizer
 _CONSENSUS_PARTY_CACHE = "UNSET"  # "UNSET"→未加载；None→加载失败(允许全部)；set→白名单
 
 def _load_consensus_parties():
-    """读取共识参与方白名单（distill_registry.json agents.is_consensus_party=true）。
+    """读取共识参与方白名单（identity_registry.json agents.is_consensus_party=true）。
+
+    唯一事实源 = ~/.liquidloop/memory/.liquid/identity_registry.json（2026-09-23 合并
+    distill_registry.json/agents 后统一；原 distill_registry.json/agents 已移除去冗余）。
 
     返回 set(agent_id) 或 None（文件缺失/不可读 → fail-open：允许全部，不告警不拒绝）。
     结果缓存于模块级；registry 变更需随 8790 进程 reload 生效。
@@ -43,7 +46,7 @@ def _load_consensus_parties():
     global _CONSENSUS_PARTY_CACHE
     if _CONSENSUS_PARTY_CACHE != "UNSET":
         return _CONSENSUS_PARTY_CACHE
-    p = os.path.expanduser("~/.workbuddy/distill/distill_registry.json")
+    p = os.path.expanduser("~/.liquidloop/memory/.liquid/identity_registry.json")
     try:
         with open(p, encoding="utf-8") as _f:
             _data = json.load(_f)
