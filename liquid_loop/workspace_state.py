@@ -54,6 +54,9 @@ class WorkspaceState(WorkspaceOps1, WorkspaceOps2, WorkspaceOps3):
     instant_events: list[dict] = field(default_factory=list)  # 即时越界事件日志（最近100条）
     instant_awareness_stats: dict = field(default_factory=lambda: {"total_events": 0, "detected": 0, "awareness_rate": 0.0})
     instant_recent_ops: list[dict] = field(default_factory=list)  # 短期操作记忆（用于重复事件检测，最近50条）
+    # 【v2.2.1】执行事件日志（d807 Temporal事件溯源落地）：save()前设置，save()时写入audit.log后清空
+    # 格式：{"type": "distill_write|anchor_update|maintenance|compress", "detail": "memory_id=xxx agent_id=xxx"}
+    pending_audit_event: dict | None = None
     # 【v0.5.0】CPE 正则化状态（借鉴 UIUC CPE 论文 arXiv:2605.09315）
     regularized_evidences: list[str] = field(default_factory=list)  # 已通过正则化检查的证据ID
     blocked_evidences: list[str] = field(default_factory=list)      # 被正则化拦截的证据ID

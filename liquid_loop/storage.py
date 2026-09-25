@@ -275,12 +275,20 @@ def save(state: WorkspaceState, workspace_root: Path):
     path = _ensure_dir(workspace_root) / STATE_FILE
     # m60 建议3 落地：写前快照（undo checkpoint），覆盖前保留当前态后悔药
     _snapshot_before_save(workspace_root)
-    # 审计链：记录并回写哈希
+    # 审计链：记录并回写哈希（d807 Temporal事件溯源落地：支持pending_audit_event记录具体操作类型）
     audit = get_audit_chain(workspace_root)
-    audit_hash = audit.append("state_save",
-        f"anchors={len(state.anchors)}_evidences={len(state.evidences)}"
-        f"_memories={len(state.memories)}_relations={len(state.relations)}"
-    )
+    _pending = getattr(state, 'pending_audit_event', None)
+    if _pending and isinstance(_pending, dict) and _pending.get('type'):
+        _evt_type = _pending['type']
+        _evt_detail = _pending.get('detail', '')
+        _counts = f"anchors={len(state.anchors)}_evidences={len(state.evidences)}_memories={len(state.memories)}_relations={len(state.relations)}"
+        audit_hash = audit.append(_evt_type, f"{_evt_detail}_{_counts}" if _evt_detail else _counts)
+        state.pending_audit_event = None  # 消费后清空
+    else:
+        audit_hash = audit.append("state_save",
+            f"anchors={len(state.anchors)}_evidences={len(state.evidences)}"
+            f"_memories={len(state.memories)}_relations={len(state.relations)}"
+        )
     state.audit_prev_hash = state.audit_chain_hash
     state.audit_chain_hash = audit_hash
     state.evict_expired()  # 蒸馏 #202：落盘前回收过期临时记忆（集中清理点，向后兼容）
