@@ -166,8 +166,12 @@ class ExtractiveCondenser:
             rep.triggered = True
 
             # 保护窗口：最近 N 条结果无条件保留（fast-jev protect range）
+            # 仅当结果数 > 保护数时才启用，否则少量结果全部被保护导致无候选可压缩
             total = len(results)
-            protect_start = max(0, total - self.protect_last_n) if self.protect_last_n > 0 else total
+            if self.protect_last_n > 0 and total > self.protect_last_n:
+                protect_start = total - self.protect_last_n
+            else:
+                protect_start = total
 
             candidates = [i for i, t in enumerate(sizes)
                           if t >= self.MIN_CANDIDATE_TOKENS and i < protect_start]
