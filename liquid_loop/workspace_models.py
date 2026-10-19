@@ -342,6 +342,11 @@ class Evidence:
     evolve_recall_hits: int = 0  # 观察期内被召回次数（≥3次且stability稳定→转正）
     # ── d763落地：证据优先级（先分类再压缩，结论/依据/限制默认保留）──
     priority: int = 0  # 0=普通,1=重要,2=关键；容量满时高优先级保留更久
+    # ── 生命周期四字段（失效标记而非删除，零丢失；老记录缺字段=有效，免迁移）──
+    valid_from: str = ""  # 生效时间戳(ISO)；空=回退timestamp视为生效起点
+    invalidated_at: str = ""  # 失效时间戳(ISO)；空=当前有效，默认活跃查询排除非空
+    source_ref: str = ""  # 来源引用(调研链接/论文DOI/上游memory_id等溯源)
+    # superseded_by 已存在(v1.8软取代)：被哪条新证据取代，与 invalidated_at 互补
 
 
 @dataclass

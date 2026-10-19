@@ -313,8 +313,23 @@ class WorkspaceOps2:
         anchor_name = {a.id: a.name for a in self.anchors}
         evs = []
         for e in self.evidences:
-            if e.archived or e.superseded_by:
+            if e.archived:
                 continue
+            # 生命周期时间窗：dt 时刻须已生效(valid_from<=dt)且尚未失效(invalidated_at 空或 >dt)。
+            # superseded_by 不硬跳：历史快照要看"当时怎么想"，旧观点在失效时间前应可见。
+            _vf = getattr(e, "valid_from", "") or e.timestamp
+            try:
+                if datetime.fromisoformat(_vf) > dt:
+                    continue
+            except ValueError:
+                pass
+            _ia = getattr(e, "invalidated_at", "")
+            if _ia:
+                try:
+                    if datetime.fromisoformat(_ia) <= dt:
+                        continue
+                except ValueError:
+                    pass
             try:
                 if datetime.fromisoformat(e.timestamp) > dt:
                     continue

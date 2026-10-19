@@ -338,6 +338,9 @@ class WorkspaceOps3:
             for e in self.evidences:
                 if e.agent_id != agent_id:
                     continue
+                # 活跃列表：排除冷归档/软取代/生命周期失效（零丢失，全量审计走 list_all）
+                if e.archived or e.superseded_by or getattr(e, "invalidated_at", ""):
+                    continue
                 cat = ""
                 anchor = next((a for a in self.anchors if a.id == e.anchor_id), None)
                 if anchor is not None:
