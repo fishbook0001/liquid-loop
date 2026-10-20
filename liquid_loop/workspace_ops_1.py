@@ -198,7 +198,8 @@ class WorkspaceOps1:
     def add_evidence(self, anchor, content: str, quality: str = "normal", agent_id: str = "",
                      dedup: bool = False, relation: str = "support",
                      target_memory_id: str = "", principle: str = "",
-                     priority: int = 0) -> Evidence | None:
+                     priority: int = 0, confidence: float = 0.0,
+                     user_owned: bool = False) -> Evidence | None:
         """向指定锚点添加一条证据。
 
         anchor 参数兼容：锚点名称(str) | 锚点ID(str) | Anchor对象
@@ -233,7 +234,7 @@ class WorkspaceOps1:
             quality=quality, timestamp=now(), agent_id=agent_id,
             relation=relation, target_memory_id=target_memory_id,
             added_iter=self._iteration, principle=principle,
-            priority=priority,
+            priority=priority, confidence=confidence, user_owned=user_owned,
         )
         self.evidences.append(e)
         target.evidence_ids.append(e.id)

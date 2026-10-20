@@ -346,6 +346,9 @@ class Evidence:
     valid_from: str = ""  # 生效时间戳(ISO)；空=回退timestamp视为生效起点
     invalidated_at: str = ""  # 失效时间戳(ISO)；空=当前有效，默认活跃查询排除非空
     source_ref: str = ""  # 来源引用(调研链接/论文DOI/上游memory_id等溯源)
+    # ── d900落地：记忆provenance置信度 + 用户手写行优先（nanoMuse arXiv:2610.08699 借鉴）──
+    confidence: float = 0.0  # 0~1 写入者置信度；模型常规推断0.5，用户手写行=1.0
+    user_owned: bool = False  # True=用户手写行，冲突/成核时优先级高于模型推断行
     # superseded_by 已存在(v1.8软取代)：被哪条新证据取代，与 invalidated_at 互补
 
 
