@@ -28,7 +28,7 @@ bucket_brigade_credit.py — Bucket-Brigade 信用分配原语（蒸馏 DeepMind
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 
@@ -69,7 +69,6 @@ def assign_credit(collective_outcome: float, contributions: list,
     total_act = sum(acts.values())
     if total_act <= 0:
         # 全是零/负激活：均匀分配（fail-open，避免全零导致下游无法学习）
-        n = len(contributions)
         return {c.agent_id: MIN_CREDIT_FLOOR for c in contributions}
 
     base = {aid: a / total_act for aid, a in acts.items()}
