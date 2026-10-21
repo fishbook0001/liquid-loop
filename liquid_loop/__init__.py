@@ -1,5 +1,5 @@
-"""Liquid Loop — Workspace Cognitive Runtime v2.2.0 (禁向量·活态液态神经网络：成核门槛/反证轨/老化回收/原理优先成核/因果演化/软取代supersede+治理查询state_at/impact/duplicates+程序性记忆层procedural_memory+PerceptionGate因果共生门控+分级存储归档ll_archive冷数据gzip稀疏CSV编码)"""
-__version__ = "2.2.0"
+"""Liquid Loop — Workspace Cognitive Runtime v2.3.0 (禁向量·活态液态神经网络：成核门槛/反证轨/老化回收/原理优先成核/因果演化/软取代supersede+治理查询state_at/impact/duplicates+程序性记忆层procedural_memory+PerceptionGate因果共生门控+分级存储归档ll_archive冷数据gzip稀疏CSV编码+去中心化拍卖路由auction_route+桶队信用分配bucket_brigade+per-agent成本计量cost_meter+熵结构分项降级)"""
+__version__ = "2.3.0"
 
 from .workspace import (
     WorkspaceState, Anchor, Evidence, Memory, Conflict,
@@ -18,6 +18,9 @@ from .procedural_memory import (
 # 蒸馏落地的公共原语（零侵入，供 cli / server / agent loop 接入）
 from .guard import should_escalate, confirm_gate, CapabilityMenu, PerceptionGate
 from .dsh_reversible import ReversibleRegistry  # 可逆副作用底座（蒸馏 DeepSeek Harness #204，2026-08-28 接活）
+from .auction_route import route, Bid, RouteDecision  # 拍卖路由原语（蒸馏 DeepMind 2610.22201，2026-10-21 接活 v390-DC1）
+from .bucket_brigade_credit import assign_credit, Contribution  # 信用分配原语（蒸馏 2610.22201+2610.22322，2026-10-21 接活 v390-DC2）
+from .cost_meter import CostMeter, Usage  # per-agent 成本/令牌计量 + 会话缓存亲和（蒸馏 magpie v392，2026-10-21 接活）
 from .session import SessionState, mark_abort, recover, save_session, load_session
 from .recall_filter import adaptive_recall
 from .rar import RARIndex, build_or_cache  # 公共检索 API（原 workspace 局部 import）

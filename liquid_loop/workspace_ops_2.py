@@ -315,6 +315,10 @@ class WorkspaceOps2:
         for e in self.evidences:
             if e.archived:
                 continue
+            # 被更优证据取代（superseded_by）的证据在现行快照不可见；
+            # 「历史当时怎么想」由 valid_from/invalidated_at 时间窗负责，与取代关系正交。
+            if getattr(e, "superseded_by", ""):
+                continue
             # 生命周期时间窗：dt 时刻须已生效(valid_from<=dt)且尚未失效(invalidated_at 空或 >dt)。
             # superseded_by 不硬跳：历史快照要看"当时怎么想"，旧观点在失效时间前应可见。
             _vf = getattr(e, "valid_from", "") or e.timestamp

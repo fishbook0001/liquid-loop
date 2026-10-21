@@ -38,3 +38,15 @@ logs/
 
 # Benchmark datasets (download from upstream, not committed)
 benchmarks/data/
+
+# Local rollback backups (never committed)
+*.bak
+*.bak_*
+*.bak-*
+
+# Quarantine / runtime experiment artifacts
+quarantine_*
+experiments/*.log
+experiments/*.jsonl
+experiments/pheromone_state.json
+experiments/__pycache__/

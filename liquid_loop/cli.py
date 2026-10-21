@@ -7,7 +7,7 @@ from .workspace import (
     CPERegularizer,
 )
 from .storage import load, save, get_audit_chain
-from .entropy import calculate, calculate_detail
+from .entropy import calculate, calculate_detail, structural_alerts, effective_level
 
 
 WORKSPACE = Path.cwd()
@@ -89,16 +89,24 @@ def status():
     """显示当前认知状态（CPE九维熵值）"""
     s = _load()
     ent = calculate(s)
-    level = "GREEN" if ent < 0.3 else ("YELLOW" if ent < 0.6 else "RED")
+    _det = calculate_detail(s)
+    level, _lvl_note = effective_level(ent, _det)
     latest_ev = max((e.timestamp for e in s.evidences), default="无活动")
     click.echo(f"锚点: {len(s.anchors)} | 证据: {len(s.evidences)} | 记忆: {len(s.memories)} | 冲突: {len(s.conflicts)} | 关系: {len(s.relations)}")
     click.echo(f"熵值: {ent:.4f} [{level}] | 最新活动: {latest_ev}")
     click.echo(f"CPE干预: {s.cpe_regularization_count}次 | 版本: {s.version}")
+    if _lvl_note:
+        click.echo(f"⚠ 等级由结构分项降级: {_lvl_note}")
 
     # 九维熵值快速
-    det = calculate_detail(s)
+    det = _det
     click.echo(f"  [原五维] 漂移{det['anchor_drift']:.2f} 冲突{det['conflict_density']:.2f} 碎片{det['evidence_fragmentation']:.2f} 活动{det['activity_gap']:.2f} 价值{det['value_decay']:.2f}")
     click.echo(f"  [CPE三维] 回顾{det['cpe_retrospective_decay']:.2f} 漂移{det['cpe_behavioral_drift']:.2f} 泛化{det['cpe_generalization_erosion']:.2f}")
+    _al = structural_alerts(det)
+    if _al:
+        click.echo("  ── 结构告警（不得被综合绿灯掩盖）──")
+        for _a in _al:
+            click.echo(f"    ! {_a['dimension']}: {_a['value']:.4f}  (阈值 {_a['threshold']})")
 
 
 @main.command()
@@ -238,13 +246,11 @@ def check():
     s = _load()
     det = calculate_detail(s)
     ent = det["combined"]
-    if ent < 0.3:
-        level, icon = "GREEN", "✓"
-    elif ent < 0.6:
-        level, icon = "YELLOW", "⚠"
-    else:
-        level, icon = "RED", "✗"
+    level, _lvl_note = effective_level(ent, det)
+    icon = "✓" if level == "GREEN" else ("⚠" if level == "YELLOW" else "✗")
     click.echo(f"{icon} 综合熵值: {ent:.4f} [{level}]")
+    if _lvl_note:
+        click.echo(f"  ⚠ 结构降级: {_lvl_note}（综合值本身不得单独作为绿灯依据）")
 
     # 显示各维度贡献
     click.echo("  ── 基础五维 ──")
@@ -258,7 +264,12 @@ def check():
     click.echo(f"    回顾性衰退:   {det['cpe_retrospective_decay']:.4f}  {'⚠' if det['cpe_retrospective_decay'] > 0.3 else '✓'}")
     click.echo(f"    策略漂移:     {det['cpe_behavioral_drift']:.4f}  {'⚠' if det['cpe_behavioral_drift'] > 0.3 else '✓'}")
     click.echo(f"    泛化崩塌:     {det['cpe_generalization_erosion']:.4f}  {'⚠' if det['cpe_generalization_erosion'] > 0.3 else '✓'}")
-    if ent >= 0.6:
+    _al = structural_alerts(det)
+    if _al:
+        click.echo("  ── 结构告警（不得被综合绿灯掩盖）──")
+        for _a in _al:
+            click.echo(f"    ! {_a['dimension']}: {_a['value']:.4f}  (阈值 {_a['threshold']})")
+    if level != "GREEN":
         click.echo("建议: 运行 cpe-scan 检查能力侵蚀详情，或添加新证据降低熵值。")
 
 

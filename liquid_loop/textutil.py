@@ -44,8 +44,8 @@ def _get_version() -> str:
     pyproject = Path(__file__).parent.parent / "pyproject.toml"
     if pyproject.exists():
         data = tomllib.loads(pyproject.read_text())
-        return data.get("project", {}).get("version", "2.2.0")
-    return "2.2.0"
+        return data.get("project", {}).get("version", "2.3.0")
+    return "2.3.0"
 
 def _tokenize(text: str) -> list[str]:
     """关键词分词（零依赖替代 sentence-transformers）

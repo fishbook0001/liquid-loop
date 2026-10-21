@@ -218,3 +218,52 @@ def calculate_detail(state: WorkspaceState) -> dict:
         "cpe_generalization_erosion": generalization_erosion_entropy(state),
         "combined": calculate(state),
     }
+
+
+# ==============================================================================
+# 【2026-10-02 收口修复·P4】结构性分项显式暴露（纯新增，可整段删除回滚）
+# 背景：九维加权把单项结构问题摊薄 —— 实测泛化崩塌 0.8137 仅贡献 0.10 权重，
+#       综合熵仍为 0.2341 判 GREEN，结构风险被总分掩盖。
+# 本段不改变 calculate() 的加权语义，只把「任一结构维度越线」显式暴露，
+# 使输出层无法再用一个绿灯把结构问题盖过去。
+# ==============================================================================
+STRUCTURAL_DIMENSIONS: dict[str, float] = {
+    "anchor_drift": 0.5,
+    "conflict_density": 0.5,
+    "evidence_fragmentation": 0.5,
+    "value_decay": 0.5,
+    "strength": 0.5,
+    "cpe_retrospective_decay": 0.5,
+    "cpe_behavioral_drift": 0.5,
+    "cpe_generalization_erosion": 0.5,
+}
+
+
+def structural_alerts(detail: dict) -> list[dict]:
+    """列出越线的结构性维度。空列表 = 无结构告警。"""
+    out = []
+    for k, thr in STRUCTURAL_DIMENSIONS.items():
+        v = detail.get(k)
+        if isinstance(v, (int, float)) and v >= thr:
+            out.append({"dimension": k, "value": round(float(v), 4), "threshold": thr})
+    out.sort(key=lambda x: x["value"], reverse=True)
+    return out
+
+
+def effective_level(combined: float, detail: dict) -> tuple:
+    """综合等级 + 结构降级。返回 (level, note)。
+
+    结构告警存在时等级不得为 GREEN（最低降到 YELLOW）；单项 >= 0.8 直接判 RED。
+    这样「单项结构崩塌」不再可能被综合绿灯掩盖。
+    """
+    level = "GREEN" if combined < 0.3 else ("YELLOW" if combined < 0.6 else "RED")
+    alerts = structural_alerts(detail)
+    if not alerts:
+        return level, ""
+    worst = alerts[0]
+    note = "结构分项越线(%s=%.4f)" % (worst["dimension"], worst["value"])
+    if worst["value"] >= 0.8:
+        return "RED", note
+    if level == "GREEN":
+        return "YELLOW", note
+    return level, note
